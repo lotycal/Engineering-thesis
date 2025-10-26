@@ -23,46 +23,55 @@
 
 #include "ns3/command-line.h"
 #include "ns3/config.h"
+#include "ns3/log.h"
 #include "ns3/uinteger.h"
 #include "ns3/boolean.h"
 #include "ns3/double.h"
 #include "ns3/string.h"
-#include "ns3/log.h"
 #include "ns3/yans-wifi-helper.h"
+#include "ns3/yans-wifi-channel.h"
+#include "ns3/wifi-phy.h"
+#include "ns3/wifi-mac-header.h"
+#include "ns3/wifi-phy-state.h"
+#include "ns3/wifi-phy-state-helper.h"
+#include "ns3/wifi-phy-rx-trace-helper.h"
+#include "ns3/wifi-tx-stats-helper.h"
+#include "ns3/wifi-co-trace-helper.h"
 #include "ns3/ssid.h"
 #include "ns3/mobility-helper.h"
 #include "ns3/internet-stack-helper.h"
 #include "ns3/ipv4-address-helper.h"
-#include "ns3/udp-client-server-helper.h"
-#include "ns3/packet-sink-helper.h"
-#include "ns3/on-off-helper.h"
-#include "ns3/ipv4-global-routing-helper.h"
-#include "ns3/packet-sink.h"
-#include "ns3/yans-wifi-channel.h"
-#include <chrono>
-#include "ns3/wifi-tx-stats-helper.h"
-#include "ns3/wifi-co-trace-helper.h"
-#include "ns3/timestamp-tag.h"
-#include <cmath>
-#include <vector>
-#include "ns3/wifi-phy-rx-trace-helper.h"
-#include "ns3/node-list.h"
-#include "ns3/timestamp-tag.h"
-#include <queue>
-#include "ns3/inet-socket-address.h"
 #include "ns3/ipv4-address.h"
-#include <iomanip>
-#include <limits>
-#include "ns3/wifi-phy-state-helper.h"
-#include "ns3/wifi-phy-state.h"
+#include "ns3/ipv4-header.h"
+#include "ns3/ipv4-l3-protocol.h"
+#include "ns3/ipv4-interface.h"
+#include "ns3/ipv4-list-routing-helper.h"
+#include "ns3/ipv4-static-routing-helper.h"
+#include "ns3/ipv4-routing-table-entry.h"
+#include "ns3/ipv4-global-routing-helper.h"
+#include "ns3/inet-socket-address.h"
+#include "ns3/udp-client-server-helper.h"
+#include "ns3/udp-socket-factory.h"
+#include "ns3/packet-sink-helper.h"
+#include "ns3/packet-sink.h"
+#include "ns3/on-off-helper.h"
+#include "ns3/node-list.h"
+#include "ns3/net-device.h"
+#include "ns3/mac48-address.h"
+#include "ns3/arp-cache.h"
+#include "ns3/object-vector.h"
+#include "ns3/pointer.h"
+#include "ns3/timestamp-tag.h"
 #include <string>
-#include "ns3/wifi-mac-header.h"
+#include <vector>
 #include <set>
 #include <map>
+#include <queue>
 #include <sstream>
-#include "ns3/wifi-phy.h"
-#include "ns3/udp-socket-factory.h"
-
+#include <iomanip>
+#include <limits>
+#include <cmath>
+#include <chrono>
 
 
 using namespace ns3;
@@ -373,6 +382,80 @@ void RxWhileDecodingCallback(std::string context, Ptr<const Packet> packet)
     rxWhileDecodingCount++;
 }
 
+static void PopulateArpCache()
+{
+  using namespace ns3;
+
+  struct IfInfo {
+    Ptr<Ipv4Interface> iface;
+    Ptr<NetDevice>     dev;
+    Ipv4Address        ip;
+    Ipv4Mask           mask;
+    Mac48Address       mac;
+  };
+  std::vector<IfInfo> all;
+
+
+  for (auto ni = NodeList::Begin(); ni != NodeList::End(); ++ni) {
+    Ptr<Ipv4L3Protocol> ip4 = (*ni)->GetObject<Ipv4L3Protocol>();
+    if (!ip4) continue;
+
+    ObjectVectorValue ifVec;
+    ip4->GetAttribute("InterfaceList", ifVec);
+
+    for (uint32_t i = 0; i < ifVec.GetN(); ++i) {
+      Ptr<Ipv4Interface> iface = ifVec.Get(i)->GetObject<Ipv4Interface>();
+      if (!iface) continue;
+      Ptr<NetDevice> dev = iface->GetDevice();
+      if (!dev) continue;
+
+      for (uint32_t k = 0; k < iface->GetNAddresses(); ++k) {
+        auto a = iface->GetAddress(k);
+        if (a.GetLocal() == Ipv4Address::GetLoopback()) continue;
+
+        IfInfo info;
+        info.iface = iface;
+        info.dev   = dev;
+        info.ip    = a.GetLocal();
+        info.mask  = a.GetMask();
+        info.mac   = Mac48Address::ConvertFrom(dev->GetAddress());
+        all.push_back(info);
+        break;
+      }
+    }
+  }
+
+
+  for (auto &me : all) {
+    Ptr<ArpCache> arp = CreateObject<ArpCache>();
+    arp->SetAliveTimeout(Seconds(24*3600)); 
+    arp->SetDevice(me.dev, me.iface); 
+
+
+
+    Ipv4Address meNet (me.ip.Get() & me.mask.Get());
+    for (auto &other : all) {
+      if (other.iface == me.iface) continue;
+      Ipv4Address otherNet (other.ip.Get() & me.mask.Get());
+      if (meNet == otherNet) {
+        auto *e = arp->Add(other.ip);
+
+        Ipv4Header ipv4Hdr;
+        ipv4Hdr.SetDestination(other.ip);
+        Ptr<Packet> dummy = Create<Packet>(100);
+        e->MarkWaitReply(ArpCache::Ipv4PayloadHeaderPair(dummy, ipv4Hdr));
+
+
+        e->MarkAlive(other.mac);
+        e->MarkPermanent();
+
+      }
+    }
+
+    me.iface->SetAttribute("ArpCache", PointerValue(arp));
+  }
+}
+
 
 int main(int argc, char *argv[])
 {
@@ -384,11 +467,20 @@ int main(int argc, char *argv[])
   int gi = 800;
   bool pcap = false;
 
+  uint32_t maxPackets = 1;
+  double   interval   = 1.0;
+  uint32_t packetSize = 1472;
+
   CommandLine cmd;
   cmd.AddValue("simulationTime", "Simulation time in seconds", simulationTime);
   cmd.AddValue("mcs", "use a specific MCS (0-11)", mcs);
   cmd.AddValue("nWifi", "number of stations", nWifi);
   cmd.AddValue("pcap", "Enable PCAP tracing", pcap);
+
+  cmd.AddValue("maxPackets", "How many packets per sender", maxPackets);
+  cmd.AddValue("interval",   "Inter-packet interval [s]",   interval);
+  cmd.AddValue("packetSize", "UDP payload size [bytes]",    packetSize);
+
   cmd.Parse(argc, argv);
 
   std::cout << std::endl
@@ -399,16 +491,16 @@ int main(int argc, char *argv[])
   std::cout << "- channel width: " << channelWidth << " MHz" << std::endl;
   std::cout << "- guard interval: " << gi << " ns" << std::endl;
 
-  NodeContainer wifiStaNodes;
-  wifiStaNodes.Create(nWifi);
-  NodeContainer wifiApNode;
-  wifiApNode.Create(1);
+  NodeContainer wifiNodes;
+  wifiNodes.Create(nWifi);
 
   YansWifiChannelHelper channel = YansWifiChannelHelper::Default();
   channel.AddPropagationLoss("ns3::FixedRssLossModel", "Rss", DoubleValue(-55.0));
 
   YansWifiPhyHelper phy;
   phy.SetChannel(channel.Create());
+  // phy.EnablePcapAll("wifi-int0");
+
 
   WifiMacHelper mac;
   WifiHelper wifi;
@@ -429,60 +521,58 @@ int main(int argc, char *argv[])
 
   Config::SetDefault("ns3::WifiMac::BE_BlockAckThreshold", UintegerValue(2));
 
-  Ssid ssid = Ssid("ns3-80211ax");
+  mac.SetType("ns3::AdhocWifiMac");
 
-  mac.SetType("ns3::StaWifiMac",
-            "Ssid", SsidValue(ssid),
-            "QosSupported", BooleanValue(true));
+  NetDeviceContainer devices = wifi.Install(phy, mac, wifiNodes);
+
+
+  // Ssid ssid = Ssid("ns3-80211ax");
+
+  // mac.SetType("ns3::StaWifiMac",
+  //           "Ssid", SsidValue(ssid),
+  //           "QosSupported", BooleanValue(true));
 
 
   phy.Set("RxNoiseFigure", DoubleValue(7.0));
 
-  NetDeviceContainer staDevice;
-  staDevice = wifi.Install(phy, mac, wifiStaNodes);
-
-  for (uint32_t i = 0; i < staDevice.GetN(); ++i) {
-  Ptr<ns3::WifiNetDevice> wnd = ns3::DynamicCast<ns3::WifiNetDevice>(staDevice.Get(i));
-  Ptr<ns3::WifiPhy>       wph = wnd->GetPhy();
-  if (i == 0) {
-    wph->SetAttribute("TxPowerStart", ns3::DoubleValue(20.0));
-    wph->SetAttribute("TxPowerEnd",   ns3::DoubleValue(20.0));
-  } else {
-    wph->SetAttribute("TxPowerStart", ns3::DoubleValue(12.0));
-    wph->SetAttribute("TxPowerEnd",   ns3::DoubleValue(12.0));
+  for (uint32_t i = 0; i < devices.GetN(); ++i) {
+    Ptr<ns3::WifiNetDevice> wnd = ns3::DynamicCast<ns3::WifiNetDevice>(devices.Get(i));
+    Ptr<ns3::WifiPhy>       wph = wnd->GetPhy();
+    if (i == 0) {
+      wph->SetAttribute("TxPowerStart", ns3::DoubleValue(20.0));
+      wph->SetAttribute("TxPowerEnd",   ns3::DoubleValue(20.0));
+    } else {
+      wph->SetAttribute("TxPowerStart", ns3::DoubleValue(12.0));
+      wph->SetAttribute("TxPowerEnd",   ns3::DoubleValue(12.0));
+    }
   }
-}
 
-  for (uint32_t i = 0; i < wifiStaNodes.GetN(); ++i)
-  {
-    uint32_t nodeId = wifiStaNodes.Get(i)->GetId();
-
+  // Pętla po węzłach:
+  for (uint32_t i = 0; i < wifiNodes.GetN(); ++i) {
+    uint32_t nodeId = wifiNodes.Get(i)->GetId();
     std::ostringstream p1, p2;
     p1 << "/NodeList/" << nodeId << "/DeviceList/0/$ns3::WifiNetDevice/Phy/TxPowerStart";
     p2 << "/NodeList/" << nodeId << "/DeviceList/0/$ns3::WifiNetDevice/Phy/TxPowerEnd";
-
     double txDbm = (i == 0 ? 16.0 : 8.0);
     Config::Set(p1.str(), DoubleValue(txDbm));
     Config::Set(p2.str(), DoubleValue(txDbm));
   }
 
-  mac.SetType("ns3::ApWifiMac",
-            "Ssid", SsidValue(ssid),
-            "QosSupported", BooleanValue(true));
 
-  NetDeviceContainer apDevice;
-  apDevice = wifi.Install(phy, mac, wifiApNode);
+  // mac.SetType("ns3::ApWifiMac",
+  //           "Ssid", SsidValue(ssid),
+  //           "QosSupported", BooleanValue(true));
 
-  NetDeviceContainer devices;
-  devices.Add(staDevice);
-  devices.Add(apDevice);
-    if (pcap) {
-  phy.SetPcapDataLinkType(WifiPhyHelper::DLT_IEEE802_11_RADIO);
-  phy.EnablePcap("pcaps/ex1-bianchi-psdu", devices, true);
-  std::cout << "PCAP enabled: writing to ./pcaps/..." << std::endl;
 
-  
-}
+// phy.SetPcapDataLinkType(YansWifiPhyHelper::DLT_IEEE802_11_RADIO);
+
+// phy.EnablePcap("wifi-int0", staDevice, true);
+
+// phy.EnablePcap("wifi-int0", apDevice.Get(0), true);
+
+phy.SetPcapDataLinkType(YansWifiPhyHelper::DLT_IEEE802_11_RADIO);
+phy.EnablePcap("pcaps2/wifi-int0", devices, true);
+
 
 Config::Connect("/NodeList/*/DeviceList/*/$ns3::WifiNetDevice/Mac/MacTx",
                 MakeCallback(&MacTxCb));
@@ -513,24 +603,24 @@ Config::Set("/NodeList/*/DeviceList/*/$ns3::WifiNetDevice/HeConfiguration/GuardI
 
   MobilityHelper mobility;
   mobility.SetMobilityModel("ns3::ConstantPositionMobilityModel");
-  mobility.Install(wifiApNode);
-  mobility.Install(wifiStaNodes);
+  mobility.Install(wifiNodes);
 
   InternetStackHelper stack;
-  stack.Install(wifiApNode);
-  stack.Install(wifiStaNodes);
+  stack.Install(wifiNodes);
+
 
   Ipv4AddressHelper address;
   address.SetBase("192.168.1.0", "255.255.255.0");
-  Ipv4InterfaceContainer staNodeInterface;
-  Ipv4InterfaceContainer apNodeInterface;
+  Ipv4InterfaceContainer ifaces = address.Assign(devices);
 
-  staNodeInterface = address.Assign(staDevice);
-    for (uint32_t i = 0; i < staNodeInterface.GetN(); ++i) {
-    ipToNodeId[staNodeInterface.GetAddress(i)] = wifiStaNodes.Get(i)->GetId();
-    }
+  for (uint32_t i = 0; i < ifaces.GetN(); ++i) {
+    ipToNodeId[ifaces.GetAddress(i)] = wifiNodes.Get(i)->GetId();
+  }
 
-  apNodeInterface = address.Assign(apDevice);
+
+  PopulateArpCache();
+  std::cout << "ARP cache populated successfully." << std::endl;
+
 
   ApplicationContainer sourceApplications, sinkApplications;
 
@@ -538,7 +628,8 @@ Config::Set("/NodeList/*/DeviceList/*/$ns3::WifiNetDevice/HeConfiguration/GuardI
   InetSocketAddress local = InetSocketAddress(Ipv4Address::GetAny(), port);
   PacketSinkHelper sinkHelper("ns3::UdpSocketFactory", local);
 
-  ApplicationContainer sinkApp = sinkHelper.Install(wifiApNode.Get(0));
+  ApplicationContainer sinkApp = sinkHelper.Install(wifiNodes.Get(0));
+
   sinkApp.Start(Seconds(0.0));
   sinkApp.Stop(Seconds(simulationTime + 1));
 
@@ -553,22 +644,46 @@ Config::Set("/NodeList/*/DeviceList/*/$ns3::WifiNetDevice/HeConfiguration/GuardI
   //appSink->TraceConnectWithoutContext("Rx", MakeCallback(&CountRxBytes));
 
 
-  for (uint32_t i = 0; i < nWifi; ++i) {
-    InetSocketAddress dst(apNodeInterface.GetAddress(0), port);
+  // for (uint32_t i = 0; i < nWifi; ++i) {
+  // InetSocketAddress dst(ifaces.GetAddress(0), port);
 
-    UdpClientHelper udpClient(dst);
-    udpClient.SetAttribute("MaxPackets", UintegerValue(1000));
-    udpClient.SetAttribute("Interval",  TimeValue(MilliSeconds(1)));
-    udpClient.SetAttribute("PacketSize", UintegerValue(1472));
 
-    ApplicationContainer srcApp = udpClient.Install(wifiStaNodes.Get(i));
-    Ptr<Application> appSta = srcApp.Get(0);
-    appSta->TraceConnectWithoutContext("Tx", MakeCallback(&CountTx));
-    appSta->TraceConnectWithoutContext("Tx", MakeCallback(&CountTxBytes));
+  //   UdpClientHelper udpClient(dst);
+  //   udpClient.SetAttribute("MaxPackets", UintegerValue(maxPackets));
+  //   udpClient.SetAttribute("Interval",   TimeValue(Seconds(interval)));
+  //   udpClient.SetAttribute("PacketSize", UintegerValue(packetSize));
 
-    appSta->SetStartTime(Seconds(1.0 + 0.02 * i));
-    appSta->SetStopTime(Seconds(simulationTime + 1));
+
+  //   ApplicationContainer srcApp = udpClient.Install(wifiStaNodes.Get(i));
+  //   Ptr<Application> appSta = srcApp.Get(0);
+  //   appSta->TraceConnectWithoutContext("Tx", MakeCallback(&CountTx));
+  //   appSta->TraceConnectWithoutContext("Tx", MakeCallback(&CountTxBytes));
+
+  //   appSta->SetStartTime(Seconds(1.0 + 0.02 * i));
+  //   appSta->SetStopTime(Seconds(simulationTime + 1));
+  // }
+
+  InetSocketAddress dst(ifaces.GetAddress(0), port);
+  UdpClientHelper udpClient(dst);
+  udpClient.SetAttribute("MaxPackets", UintegerValue(maxPackets));
+  udpClient.SetAttribute("Interval",   TimeValue(Seconds(interval)));
+  udpClient.SetAttribute("PacketSize", UintegerValue(packetSize));
+
+
+
+  for (uint32_t i = 0; i < nWifi; ++i)
+  {
+    if (i > 0)
+    {
+      ApplicationContainer srcApp = udpClient.Install(wifiNodes.Get(i));
+      Ptr<Application> appSta = srcApp.Get(0);
+      appSta->TraceConnectWithoutContext("Tx", MakeCallback(&CountTx));
+      appSta->TraceConnectWithoutContext("Tx", MakeCallback(&CountTxBytes));
+      appSta->SetStartTime(Seconds(1.0 + 0.02 * i));
+      appSta->SetStopTime(Seconds(simulationTime + 1));
+    }
   }
+
 
   Simulator::Stop(Seconds(simulationTime + 1));
 
@@ -578,13 +693,13 @@ Config::Set("/NodeList/*/DeviceList/*/$ns3::WifiNetDevice/HeConfiguration/GuardI
   auto start = std::chrono::high_resolution_clock::now();
 
   WifiTxStatsHelper txStatsHelper;
-  txStatsHelper.Enable(wifiStaNodes);
-  txStatsHelper.Enable(wifiApNode);
-  txStatsHelper.Start(Seconds(1.0));
-  txStatsHelper.Stop(Seconds(simulationTime + 1));
+  txStatsHelper.Enable(wifiNodes);
+  txStatsHelper.Start(Seconds(0.0));
+  txStatsHelper.Stop(Seconds(simulationTime));
 
-  WifiCoTraceHelper coHelper(Seconds(1.0), Seconds(11.0));
+  WifiCoTraceHelper coHelper(Seconds(0.0), Seconds(simulationTime));
   coHelper.Enable(devices);
+
 
   std::vector<double> delays;
   
