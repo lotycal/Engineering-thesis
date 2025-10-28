@@ -152,20 +152,32 @@ int main(int argc, char *argv[])
   staNodeInterface = address.Assign(staDevice);
   apNodeInterface = address.Assign(apDevice);
 
-  // Install applications (traffic generators)
-  ApplicationContainer sourceApplications, sinkApplications;
-  uint32_t portNumber = 9;
-  for (uint32_t index = 0; index < nWifi; ++index) // Loop over all stations (which transmit to the AP)
-  {
-    auto ipv4 = wifiApNode.Get(0)->GetObject<Ipv4>();                       // Get destination's IP interface
-    const auto address = ipv4->GetAddress(1, 0).GetLocal();                 // Get destination's IP address
-    InetSocketAddress sinkSocket(address, portNumber++);                    // Configure destination socket
-    OnOffHelper onOffHelper("ns3::UdpSocketFactory", sinkSocket);           // Configure traffic generator: UDP, destination socket
-    onOffHelper.SetConstantRate(DataRate(150e6 / nWifi), 1472);            // Set data rate (150 Mb/s divided by no. of transmitting stations) and packet size [B]
-    sourceApplications.Add(onOffHelper.Install(wifiStaNodes.Get(index)));    // Install traffic generator on station
-    PacketSinkHelper packetSinkHelper("ns3::UdpSocketFactory", sinkSocket); // Configure traffic sink
-    sinkApplications.Add(packetSinkHelper.Install(wifiApNode.Get(0)));      // Install traffic sink
-  }
+    // Install applications (traffic generators)
+    ApplicationContainer sourceApplications, sinkApplications;
+    const uint16_t portNumber = 9;
+
+    // --- Sink na AP ---
+    auto apIpv4 = wifiApNode.Get(0)->GetObject<Ipv4>();
+    Ipv4Address apAddr = apIpv4->GetAddress(1, 0).GetLocal();
+    InetSocketAddress sinkSocket(apAddr, portNumber);
+
+    PacketSinkHelper packetSinkHelper("ns3::UdpSocketFactory", sinkSocket);
+    sinkApplications.Add(packetSinkHelper.Install(wifiApNode.Get(0)));
+
+    // --- Klient tylko na pierwszej stacji: 1 pakiet ---
+    UdpClientHelper client(sinkSocket);
+    client.SetAttribute("MaxPackets", UintegerValue(1));        // dokładnie 1 pakiet
+    client.SetAttribute("Interval", TimeValue(Seconds(1.0)));   // bez znaczenia dla 1 pkt
+    client.SetAttribute("PacketSize", UintegerValue(1472));     // jak wcześniej
+
+    sourceApplications.Add(client.Install(wifiStaNodes.Get(0)));
+
+    // --- Timingi ---
+    sinkApplications.Start(Seconds(0.0));
+    sinkApplications.Stop(Seconds(simulationTime + 1));
+    sourceApplications.Start(Seconds(1.0));
+    sourceApplications.Stop(Seconds(simulationTime + 1));
+
 
   // Configure application start/stop times
   // Note:
