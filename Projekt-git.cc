@@ -523,9 +523,35 @@ int main(int argc, char *argv[])
 
   mac.SetType("ns3::AdhocWifiMac");
 
+  //USUNAC GDY STACJA MONITORUKACA
   NetDeviceContainer devices = wifi.Install(phy, mac, wifiNodes);
 
+  //STACJA MONITORUJACA
+  // NetDeviceContainer devices;
 
+  // NodeContainer txSta;
+  // txSta.Add(wifiNodes.Get(0));
+  // NetDeviceContainer staDevice = wifi.Install(phy, mac, txSta);
+  // devices.Add(staDevice);
+
+  // NodeContainer monitorSta;
+  // monitorSta.Add(wifiNodes.Get(1));
+
+  // YansWifiChannelHelper monitorChannel = YansWifiChannelHelper::Default();
+  // Ptr<YansWifiChannel> monitorChan = monitorChannel.Create();
+
+  // YansWifiPhyHelper monitorPhy;
+  // monitorPhy.SetChannel(monitorChan);
+
+  // WifiMacHelper monitorMac;
+  // monitorMac.SetType("ns3::AdhocWifiMac");
+
+  // NetDeviceContainer monitorDevice = wifi.Install(monitorPhy, monitorMac, monitorSta);
+  // devices.Add(monitorDevice);
+
+
+
+  //SSID
   // Ssid ssid = Ssid("ns3-80211ax");
 
   // mac.SetType("ns3::StaWifiMac",
@@ -547,7 +573,6 @@ int main(int argc, char *argv[])
     }
   }
 
-  // Pętla po węzłach:
   for (uint32_t i = 0; i < wifiNodes.GetN(); ++i) {
     uint32_t nodeId = wifiNodes.Get(i)->GetId();
     std::ostringstream p1, p2;
