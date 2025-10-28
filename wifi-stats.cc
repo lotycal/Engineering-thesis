@@ -136,18 +136,25 @@ int main(int argc, char *argv[])
 {
 
   // Initialize default simulation parameters
-  uint32_t nWifi = 1;        // Number of transmitting stations
-  double simulationTime = 1; // Default simulation time [s]
-  int mcs = 11;              // Default MCS is set to highest value
-  int channelWidth = 20;     // Default channel width [MHz]
-  int gi = 800;              // Default guard interval [ns]
+  uint32_t nWifi = 1;            // Number of transmitting stations
+  double simulationTime = 1;     // Default simulation time [s]
+  int mcs = 11;                  // Default MCS (0–11)
+  int channelWidth = 20;         // Default channel width [MHz]
+  int gi = 800;                  // Default guard interval [ns]
+  uint32_t maxPackets = 1;       // Default number of packets per station
+  double interval = 1.0;         // Default interval between packets [s]
+  uint32_t packetSize = 1472;    // Default packet size [bytes]
 
   // Parse command line arguments
   CommandLine cmd;
   cmd.AddValue("simulationTime", "Simulation time in seconds", simulationTime);
-  cmd.AddValue("mcs", "use a specific MCS (0-11)", mcs);
-  cmd.AddValue("nWifi", "number of stations", nWifi);
+  cmd.AddValue("mcs", "Use a specific MCS (0–11)", mcs);
+  cmd.AddValue("nWifi", "Number of stations", nWifi);
+  cmd.AddValue("maxPackets", "Number of packets to send per station", maxPackets);
+  cmd.AddValue("interval", "Time interval between packets (s)", interval);
+  cmd.AddValue("packetSize", "Size of each packet (bytes)", packetSize);
   cmd.Parse(argc, argv);
+
 
   // Print simulation settings to screen
   std::cout << std::endl
@@ -240,9 +247,10 @@ int main(int argc, char *argv[])
 
     // --- Klient tylko na pierwszej stacji: 1 pakiet ---
     UdpClientHelper client(sinkSocket);
-    client.SetAttribute("MaxPackets", UintegerValue(1));        // dokładnie 1 pakiet
-    client.SetAttribute("Interval", TimeValue(Seconds(1.0)));   // bez znaczenia dla 1 pkt
-    client.SetAttribute("PacketSize", UintegerValue(1472));     // jak wcześniej
+    client.SetAttribute("MaxPackets", UintegerValue(maxPackets));
+    client.SetAttribute("Interval", TimeValue(Seconds(interval)));
+    client.SetAttribute("PacketSize", UintegerValue(packetSize));
+
 
     sourceApplications.Add(client.Install(wifiStaNodes.Get(0)));
 
