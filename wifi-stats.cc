@@ -129,10 +129,8 @@ void PopulateARPcache ()
         }
     }
 
-  std::cout << "✅ ARP cache populated successfully for all interfaces." << std::endl;
+  std::cout << "ARP cache populated successfully for all interfaces." << std::endl;
 }
-
-
 
 int main(int argc, char *argv[])
 {
