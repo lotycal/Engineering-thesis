@@ -40,6 +40,13 @@
 #include "ns3/packet-sink.h"
 #include "ns3/yans-wifi-channel.h"
 #include <chrono> // For high resolution clock
+#include "ns3/arp-cache.h"
+#include "ns3/node-list.h"
+#include "ns3/ipv4-interface.h"
+#include "ns3/object-vector.h"
+#include "ns3/pointer.h"
+
+
 
 
 // Exercise: 1
@@ -61,6 +68,71 @@
 using namespace ns3;
 
 NS_LOG_COMPONENT_DEFINE ("ex1");
+
+#include "ns3/object-vector.h"
+#include "ns3/pointer.h" // <---- potrzebne dla PointerValue!
+
+void PopulateARPcache ()
+{
+  Ptr<ArpCache> arp = CreateObject<ArpCache> ();
+  arp->SetAliveTimeout (Seconds (3600 * 24 * 365));
+
+  // Tworzymy wpisy ARP dla każdego interfejsu
+  for (auto i = NodeList::Begin (); i != NodeList::End (); ++i)
+    {
+      Ptr<Ipv4L3Protocol> ip = (*i)->GetObject<Ipv4L3Protocol> ();
+      if (!ip) continue;
+
+      ObjectVectorValue interfaces;
+      ip->GetAttribute ("InterfaceList", interfaces);
+
+      for (auto j = interfaces.Begin (); j != interfaces.End (); ++j)
+        {
+          Ptr<Ipv4Interface> ipIface = (*j).second->GetObject<Ipv4Interface> ();
+          if (!ipIface) continue;
+          Ptr<NetDevice> device = ipIface->GetDevice ();
+          if (!device) continue;
+
+          Mac48Address addr = Mac48Address::ConvertFrom (device->GetAddress ());
+
+          for (uint32_t k = 0; k < ipIface->GetNAddresses (); ++k)
+            {
+              Ipv4Address ipAddr = ipIface->GetAddress (k).GetLocal ();
+              if (ipAddr == Ipv4Address::GetLoopback ())
+                continue;
+
+              ArpCache::Entry *entry = arp->Add (ipAddr);
+              Ipv4Header ipv4Hdr;
+              ipv4Hdr.SetDestination (ipAddr);
+              Ptr<Packet> p = Create<Packet> (100);
+              entry->MarkWaitReply (ArpCache::Ipv4PayloadHeaderPair (p, ipv4Hdr));
+              entry->MarkAlive (addr);
+              entry->MarkPermanent (); // wpis stały
+            }
+        }
+    }
+
+  // Przypisz cache do wszystkich interfejsów
+  for (auto i = NodeList::Begin (); i != NodeList::End (); ++i)
+    {
+      Ptr<Ipv4L3Protocol> ip = (*i)->GetObject<Ipv4L3Protocol> ();
+      if (!ip) continue;
+
+      ObjectVectorValue interfaces;
+      ip->GetAttribute ("InterfaceList", interfaces);
+
+      for (auto j = interfaces.Begin (); j != interfaces.End (); ++j)
+        {
+          Ptr<Ipv4Interface> ipIface = (*j).second->GetObject<Ipv4Interface> ();
+          if (ipIface)
+            ipIface->SetAttribute ("ArpCache", PointerValue (arp));
+        }
+    }
+
+  std::cout << "✅ ARP cache populated successfully for all interfaces." << std::endl;
+}
+
+
 
 int main(int argc, char *argv[])
 {
@@ -99,7 +171,6 @@ int main(int argc, char *argv[])
   YansWifiPhyHelper phy;
   phy.SetChannel(channel.Create());
 
-
   // Create and configure Wi-Fi network
   WifiMacHelper mac;
   WifiHelper wifi;
@@ -129,6 +200,7 @@ int main(int argc, char *argv[])
   NetDeviceContainer apDevice;
   apDevice = wifi.Install(phy, mac, wifiApNode);
 
+
   // Set guard interval on all interfaces of all nodes
   Config::Set("/NodeList/*/DeviceList/*/$ns3::WifiNetDevice/HeConfiguration/GuardInterval", TimeValue(NanoSeconds(gi)));
 
@@ -151,6 +223,10 @@ int main(int argc, char *argv[])
 
   staNodeInterface = address.Assign(staDevice);
   apNodeInterface = address.Assign(apDevice);
+
+  PopulateARPcache();
+
+  phy.EnablePcapAll("wifi-stats");
 
     // Install applications (traffic generators)
     ApplicationContainer sourceApplications, sinkApplications;
