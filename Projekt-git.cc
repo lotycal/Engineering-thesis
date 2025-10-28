@@ -523,7 +523,7 @@ int main(int argc, char *argv[])
 
   mac.SetType("ns3::AdhocWifiMac");
 
-  //USUNAC GDY STACJA MONITORUKACA
+  //USUNAC GDY STACJA MONITORUJACA
   NetDeviceContainer devices = wifi.Install(phy, mac, wifiNodes);
 
   //STACJA MONITORUJACA
@@ -655,8 +655,18 @@ Config::Set("/NodeList/*/DeviceList/*/$ns3::WifiNetDevice/HeConfiguration/GuardI
 
   ApplicationContainer sinkApp = sinkHelper.Install(wifiNodes.Get(0));
 
-  sinkApp.Start(Seconds(0.0));
-  sinkApp.Stop(Seconds(simulationTime + 1));
+
+  double startTime = 0.000;
+  double stopTime = simulationTime + 1;
+
+  sinkApp.Start(Seconds(startTime));
+  sinkApp.Stop(Seconds(stopTime));
+
+  clientApp.Start(Seconds(startTime));
+  clientApp.Stop(Seconds(stopTime));
+
+  //sinkApp.Start(Seconds(0.0));
+  //sinkApp.Stop(Seconds(simulationTime + 1));
 
   sinkApplications.Add(sinkApp);
 
