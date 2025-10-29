@@ -179,17 +179,20 @@ int main(int argc, char *argv[])
   // Create and configure Wi-Fi network
   WifiMacHelper mac;
   WifiHelper wifi;
-  wifi.SetStandard(WIFI_STANDARD_80211ax);
+  wifi.SetStandard(WIFI_STANDARD_80211a);
   
   // Set channel width for given PHY
-  std::string channelStr("{0, " + std::to_string(channelWidth) + ", BAND_5GHZ, 0}");
-  phy.Set("ChannelSettings", StringValue(channelStr));
+  //std::string channelStr("{0, " + std::to_string(channelWidth) + ", BAND_5GHZ, 0}");
+  //phy.Set("ChannelSettings", StringValue(channelStr));
+  phy.Set("ChannelSettings", StringValue("{36, 20, BAND_5GHZ, 0}"));
 
-  std::ostringstream oss;
-  oss << "HeMcs" << mcs;
-  wifi.SetRemoteStationManager("ns3::ConstantRateWifiManager", "DataMode", StringValue(oss.str()),
-                               "ControlMode", StringValue(oss.str())); // Set MCS
+  //std::ostringstream oss;
+  //oss << "HeMcs" << mcs;
+  //wifi.SetRemoteStationManager("ns3::ConstantRateWifiManager", "DataMode", StringValue(oss.str()),
+  //                             "ControlMode", StringValue(oss.str())); // Set MCS
 
+  wifi.SetRemoteStationManager("ns3::IdealWifiManager");
+  
   //Ssid ssid = Ssid("ns3-80211ax"); // Set SSID
 
   mac.SetType("ns3::AdhocWifiMac");
