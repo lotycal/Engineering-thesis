@@ -190,17 +190,18 @@ int main(int argc, char *argv[])
   wifi.SetRemoteStationManager("ns3::ConstantRateWifiManager", "DataMode", StringValue(oss.str()),
                                "ControlMode", StringValue(oss.str())); // Set MCS
 
-  Ssid ssid = Ssid("ns3-80211ax"); // Set SSID
+  //Ssid ssid = Ssid("ns3-80211ax"); // Set SSID
 
-  mac.SetType("ns3::StaWifiMac",
-              "Ssid", SsidValue(ssid));
+  mac.SetType("ns3::AdhocWifiMac");
+  //mac.SetType("ns3::StaWifiMac",
+  //            "Ssid", SsidValue(ssid));
 
   // Create and configure Wi-Fi interfaces
   NetDeviceContainer staDevice;
   staDevice = wifi.Install(phy, mac, wifiStaNodes);
 
-  mac.SetType("ns3::ApWifiMac",
-              "Ssid", SsidValue(ssid));
+  //mac.SetType("ns3::ApWifiMac",
+  //            "Ssid", SsidValue(ssid));
 
   NetDeviceContainer apDevice;
   apDevice = wifi.Install(phy, mac, wifiApNode);
