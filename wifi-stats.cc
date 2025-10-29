@@ -45,6 +45,12 @@
 #include "ns3/ipv4-interface.h"
 #include "ns3/object-vector.h"
 #include "ns3/pointer.h"
+#include "ns3/wifi-phy-state.h"
+#include "ns3/object-vector.h"
+#include "ns3/pointer.h"
+#include "ns3/wifi-tx-stats-helper.h"
+
+
 
 
 
@@ -69,8 +75,23 @@ using namespace ns3;
 
 NS_LOG_COMPONENT_DEFINE ("ex1");
 
-#include "ns3/object-vector.h"
-#include "ns3/pointer.h" // <---- potrzebne dla PointerValue!
+
+
+static double gPhyIdleSec = 0.0, gPhyCcaSec = 0.0, gPhyTxSec = 0.0, gPhyRxSec = 0.0, gPhyOtherSec = 0.0;
+
+static void PhyStateLogger(ns3::Time /*start*/, ns3::Time duration, ns3::WifiPhyState state)
+{
+  const double d = duration.GetSeconds();
+  switch (state)
+  {
+    case ns3::WifiPhyState::IDLE:      gPhyIdleSec += d; break;
+    case ns3::WifiPhyState::CCA_BUSY:  gPhyCcaSec  += d; break;
+    case ns3::WifiPhyState::TX:        gPhyTxSec   += d; break;
+    case ns3::WifiPhyState::RX:        gPhyRxSec   += d; break;
+    default:                           gPhyOtherSec+= d; break;
+  }
+}
+
 
 void PopulateARPcache ()
 {
@@ -209,6 +230,10 @@ int main(int argc, char *argv[])
   NetDeviceContainer apDevice;
   apDevice = wifi.Install(phy, mac, wifiApNode);
 
+  // --- MAC layer statistics helper ---
+  WifiTxStatsHelper txStats;
+  txStats.Enable(staDevice);
+  txStats.Enable(apDevice);
 
   // Set guard interval on all interfaces of all nodes
   Config::Set("/NodeList/*/DeviceList/*/$ns3::WifiNetDevice/HeConfiguration/GuardInterval", TimeValue(NanoSeconds(gi)));
@@ -275,6 +300,7 @@ int main(int argc, char *argv[])
   sourceApplications.Start(Seconds(1.0));
   sourceApplications.Stop(Seconds(simulationTime + 1));
 
+
   // Define simulation stop time
   Simulator::Stop(Seconds(simulationTime + 1));
 
@@ -283,6 +309,11 @@ int main(int argc, char *argv[])
             << "Starting simulation... ";
   // Record start time
   auto start = std::chrono::high_resolution_clock::now();
+
+  Config::ConnectWithoutContext(
+  "/NodeList/*/DeviceList/*/$ns3::WifiNetDevice/Phy/State/State",
+  MakeCallback(&PhyStateLogger)
+  );
 
   // Run the simulation!
   Simulator::Run();
@@ -304,6 +335,31 @@ int main(int argc, char *argv[])
   // Print results
   std::cout << "Results: " << std::endl;
   std::cout << "- aggregate throughput: " << throughput << " Mbit/s" << std::endl;
+
+  {
+  const double total = gPhyIdleSec + gPhyCcaSec + gPhyTxSec + gPhyRxSec + gPhyOtherSec;
+  const double util  = (total > 0.0) ? ((gPhyTxSec + gPhyRxSec + gPhyCcaSec) / total) : 0.0;
+
+  std::cout << "\n=== PHY layer (time share) ===\n";
+  std::cout << "IDLE:      " << gPhyIdleSec << " s\n";
+  std::cout << "CCA_BUSY:  " << gPhyCcaSec  << " s\n";
+  std::cout << "TX:        " << gPhyTxSec   << " s\n";
+  std::cout << "RX:        " << gPhyRxSec   << " s\n";
+  std::cout << "OTHER:     " << gPhyOtherSec<< " s\n";
+  std::cout << "Channel Utilization: " << std::fixed << std::setprecision(2)
+            << (util * 100.0) << " %\n";
+}
+
+// --- MAC layer (MPDU) statistics ---
+std::cout << std::endl << "=== MAC layer (MPDU) statistics ===" << std::endl;
+
+uint64_t mpduSuccesses = txStats.GetSuccesses();
+uint64_t mpduFailures = txStats.GetFailures();
+uint64_t mpduRetries = txStats.GetRetransmissions();
+
+std::cout << "MPDU Successes:     " << mpduSuccesses << std::endl;
+std::cout << "MPDU Failures:      " << mpduFailures << std::endl;
+std::cout << "MPDU Retransmits:   " << mpduRetries << std::endl;
 
   // Clean-up
   Simulator::Destroy();
