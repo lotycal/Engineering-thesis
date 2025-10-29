@@ -43,8 +43,6 @@
 #include "ns3/arp-cache.h"
 #include "ns3/node-list.h"
 #include "ns3/ipv4-interface.h"
-#include "ns3/object-vector.h"
-#include "ns3/pointer.h"
 #include "ns3/wifi-phy-state.h"
 #include "ns3/object-vector.h"
 #include "ns3/pointer.h"
@@ -75,12 +73,82 @@ using namespace ns3;
 
 NS_LOG_COMPONENT_DEFINE ("ex1");
 
+// --- PHY PSDU statistics ---
+static uint64_t gPsduSuccesses = 0;
+static uint64_t gPsduFailures = 0;
+static uint64_t gPhyHeaderFailures = 0;
+static uint64_t gRxWhileDecoding = 0;
+static uint64_t gRxAbortedByTx = 0;
+static uint64_t gTotalRxEvents = 0;
+static uint64_t gTotalPhyEvents = 0;
 
+static std::map<std::pair<uint32_t, uint32_t>, double> gTxTimePerDev;
+static std::map<std::pair<uint32_t, uint32_t>, double> gRxTimePerDev;
+static std::map<std::pair<uint32_t, uint32_t>, double> gCcaTimePerDev;
+
+static std::pair<uint32_t, uint32_t> ParseNodeDevFromContext(const std::string& ctx);
 
 static double gPhyIdleSec = 0.0, gPhyCcaSec = 0.0, gPhyTxSec = 0.0, gPhyRxSec = 0.0, gPhyOtherSec = 0.0;
 
+// Poprawnie odebrany PSDU
+static void
+PhyRxEndHandler(std::string /*context*/, Ptr<const Packet> /*packet*/)
+{
+  gPsduSuccesses++;
+  gTotalRxEvents++;
+}
+
+static void
+PhyRxDropHandler(std::string /*context*/, Ptr<const Packet> /*packet*/, WifiPhyRxfailureReason reason)
+{
+  switch (reason)
+  {
+    // --- Header-level failures ---
+    case WifiPhyRxfailureReason::L_SIG_FAILURE:
+    case WifiPhyRxfailureReason::HT_SIG_FAILURE:
+    case WifiPhyRxfailureReason::SIG_A_FAILURE:
+    case WifiPhyRxfailureReason::SIG_B_FAILURE:
+      gPhyHeaderFailures++;
+      break;
+
+    // --- RX events while decoding preamble ---
+    case WifiPhyRxfailureReason::BUSY_DECODING_PREAMBLE:
+    case WifiPhyRxfailureReason::PREAMBLE_DETECT_FAILURE:
+      gRxWhileDecoding++;
+      break;
+
+    // --- Odbiór przerwany przez rozpoczęcie transmisji TX ---
+    case WifiPhyRxfailureReason::RECEPTION_ABORTED_BY_TX:
+      gRxAbortedByTx++;
+      break;
+
+
+
+    // --- Faktyczne PSDU-level failures ---
+    default:
+      gPsduFailures++;
+      break;
+  }
+    gTotalRxEvents++;
+}
+
+static void
+PerDevicePhyStateTracker(std::string context, Time /*start*/, Time duration, WifiPhyState state)
+{
+  auto key = ParseNodeDevFromContext(context);
+  double d = duration.GetSeconds();
+  switch (state)
+  {
+    case WifiPhyState::TX:       gTxTimePerDev[key]  += d; break;
+    case WifiPhyState::RX:       gRxTimePerDev[key]  += d; break;
+    case WifiPhyState::CCA_BUSY: gCcaTimePerDev[key] += d; break;
+    default: break;
+  }
+}
+
 static void PhyStateLogger(ns3::Time /*start*/, ns3::Time duration, ns3::WifiPhyState state)
 {
+  gTotalPhyEvents++;
   const double d = duration.GetSeconds();
   switch (state)
   {
@@ -92,6 +160,18 @@ static void PhyStateLogger(ns3::Time /*start*/, ns3::Time duration, ns3::WifiPhy
   }
 }
 
+static std::pair<uint32_t, uint32_t> ParseNodeDevFromContext(const std::string& ctx)
+{
+  size_t nodeStart = ctx.find("/NodeList/") + 10;
+  size_t nodeEnd   = ctx.find("/DeviceList/", nodeStart);
+  uint32_t nodeId  = std::stoi(ctx.substr(nodeStart, nodeEnd - nodeStart));
+
+  size_t devStart  = nodeEnd + 12;
+  size_t devEnd    = ctx.find("/", devStart);
+  uint32_t devId   = std::stoi(ctx.substr(devStart, devEnd - devStart));
+
+  return {nodeId, devId};
+}
 
 void PopulateARPcache ()
 {
@@ -315,6 +395,19 @@ int main(int argc, char *argv[])
   MakeCallback(&PhyStateLogger)
   );
 
+  // --- PHY PSDU success/failure tracking ---
+  Config::Connect("/NodeList/*/DeviceList/*/$ns3::WifiNetDevice/Phy/PhyRxEnd",
+                  MakeCallback(&PhyRxEndHandler));
+
+  Config::Connect("/NodeList/*/DeviceList/*/$ns3::WifiNetDevice/Phy/PhyRxDrop",
+                  MakeCallback(&PhyRxDropHandler));
+
+  // --- Per-device PHY state tracking ---
+  Config::Connect(
+    "/NodeList/*/DeviceList/*/$ns3::WifiNetDevice/Phy/State/State",
+    MakeCallback(&PerDevicePhyStateTracker)
+  );
+
   // Run the simulation!
   Simulator::Run();
 
@@ -360,6 +453,35 @@ uint64_t mpduRetries = txStats.GetRetransmissions();
 std::cout << "MPDU Successes:     " << mpduSuccesses << std::endl;
 std::cout << "MPDU Failures:      " << mpduFailures << std::endl;
 std::cout << "MPDU Retransmits:   " << mpduRetries << std::endl;
+
+std::cout << "\n--- PHY PSDU statistics ---\n";
+std::cout << "PHY header failures: " << gPhyHeaderFailures << "\n";
+std::cout << "RX while decoding preamble: " << gRxWhileDecoding << "\n";
+std::cout << "RX aborted by TX:           " << gRxAbortedByTx << "\n";
+std::cout << "PSDU successes:       " << gPsduSuccesses << "\n";
+std::cout << "PSDU failures:        " << gPsduFailures << "\n";
+std::cout << "Total RX events:       " << gTotalRxEvents << "\n";
+std::cout << "Total PHY events:      " << gTotalPhyEvents << "\n";
+
+std::cout << "\n--- Channel Utilization per node/device ---\n";
+for (const auto& kv : gTxTimePerDev)
+{
+  auto key = kv.first;
+  double tx = kv.second;
+  double rx = gRxTimePerDev[key];
+  double cca = gCcaTimePerDev[key];
+  double busy = tx + rx + cca;
+  double totalSimTime = simulationTime + 1.0; // tak jak w Twoim Simulator::Stop
+  double utilPct = (busy / totalSimTime) * 100.0;
+
+  std::cout << "Node " << key.first
+            << " | Dev " << key.second
+            << " | TX=" << std::fixed << std::setprecision(6) << tx
+            << " s, RX=" << rx
+            << " s, CCA=" << cca
+            << " s | Utilization=" << std::setprecision(2)
+            << utilPct << " %\n";
+}
 
   // Clean-up
   Simulator::Destroy();
