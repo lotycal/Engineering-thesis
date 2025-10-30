@@ -81,14 +81,24 @@ static uint64_t gRxWhileDecoding = 0;
 static uint64_t gRxAbortedByTx = 0;
 static uint64_t gTotalRxEvents = 0;
 static uint64_t gTotalPhyEvents = 0;
+static double gSimulationTime = 0.0;
+static uint32_t gPacketSize = 0;
+
 
 static std::map<std::pair<uint32_t, uint32_t>, double> gTxTimePerDev;
 static std::map<std::pair<uint32_t, uint32_t>, double> gRxTimePerDev;
 static std::map<std::pair<uint32_t, uint32_t>, double> gCcaTimePerDev;
+static std::map<std::pair<uint32_t, uint32_t>, double> gTxOppDurationPerDev;
+static std::map<std::pair<uint32_t, uint32_t>, uint64_t> gMpduTxPerDev;
+static std::map<std::pair<uint32_t, uint32_t>, uint64_t> gMpduRetryPerDev;
+static std::map<std::pair<uint32_t, uint32_t>, uint64_t> gMpduFailPerDev;
+
 
 static std::pair<uint32_t, uint32_t> ParseNodeDevFromContext(const std::string& ctx);
 
 static double gPhyIdleSec = 0.0, gPhyCcaSec = 0.0, gPhyTxSec = 0.0, gPhyRxSec = 0.0, gPhyOtherSec = 0.0;
+
+// --- PSDU callbacks (success & failure) ---
 
 // Poprawnie odebrany PSDU
 static void
@@ -97,6 +107,7 @@ PhyRxEndHandler(std::string /*context*/, Ptr<const Packet> /*packet*/)
   gPsduSuccesses++;
   gTotalRxEvents++;
 }
+
 
 static void
 PhyRxDropHandler(std::string /*context*/, Ptr<const Packet> /*packet*/, WifiPhyRxfailureReason reason)
@@ -133,18 +144,48 @@ PhyRxDropHandler(std::string /*context*/, Ptr<const Packet> /*packet*/, WifiPhyR
 }
 
 static void
+MacTxSuccessPerDev(std::string context, Ptr<const Packet> p)
+{
+  auto key = ParseNodeDevFromContext(context);
+  gMpduTxPerDev[key]++;
+}
+
+static void
+MacTxFailPerDev(std::string context, Ptr<const Packet> p)
+{
+  auto key = ParseNodeDevFromContext(context);
+  gMpduFailPerDev[key]++;
+}
+
+
+
+static void
 PerDevicePhyStateTracker(std::string context, Time /*start*/, Time duration, WifiPhyState state)
 {
   auto key = ParseNodeDevFromContext(context);
   double d = duration.GetSeconds();
+
   switch (state)
   {
-    case WifiPhyState::TX:       gTxTimePerDev[key]  += d; break;
-    case WifiPhyState::RX:       gRxTimePerDev[key]  += d; break;
-    case WifiPhyState::CCA_BUSY: gCcaTimePerDev[key] += d; break;
-    default: break;
+    case WifiPhyState::TX:
+      gTxTimePerDev[key] += d;
+      gTxOppDurationPerDev[key] += d;
+      break;
+
+    case WifiPhyState::RX:
+      gRxTimePerDev[key] += d;
+      break;
+
+    case WifiPhyState::CCA_BUSY:
+      gCcaTimePerDev[key] += d;
+      break;
+
+    default:
+      break;
   }
 }
+
+
 
 static void PhyStateLogger(ns3::Time /*start*/, ns3::Time duration, ns3::WifiPhyState state)
 {
@@ -172,6 +213,8 @@ static std::pair<uint32_t, uint32_t> ParseNodeDevFromContext(const std::string& 
 
   return {nodeId, devId};
 }
+
+
 
 void PopulateARPcache ()
 {
@@ -256,6 +299,8 @@ int main(int argc, char *argv[])
   cmd.AddValue("packetSize", "Size of each packet (bytes)", packetSize);
   cmd.Parse(argc, argv);
 
+  gSimulationTime = simulationTime;
+  gPacketSize = packetSize;
 
   // Print simulation settings to screen
   std::cout << std::endl
@@ -408,6 +453,15 @@ int main(int argc, char *argv[])
     MakeCallback(&PerDevicePhyStateTracker)
   );
 
+  Config::Connect(
+  "/NodeList/*/DeviceList/*/$ns3::WifiNetDevice/Mac/MacTx",
+  MakeCallback(&MacTxSuccessPerDev));
+
+Config::Connect(
+  "/NodeList/*/DeviceList/*/$ns3::WifiNetDevice/Mac/MacTxDrop",
+  MakeCallback(&MacTxFailPerDev));
+
+
   // Run the simulation!
   Simulator::Run();
 
@@ -482,6 +536,80 @@ for (const auto& kv : gTxTimePerDev)
             << " s | Utilization=" << std::setprecision(2)
             << utilPct << " %\n";
 }
+
+std::cout << "\n--- Tx Opportunity Duration per node/device ---\n";
+for (const auto& kv : gTxOppDurationPerDev)
+{
+  auto key = kv.first;
+  double txOpp = kv.second;
+  std::cout << "Node " << key.first
+            << " | Dev " << key.second
+            << " | Tx Opportunity Duration = "
+            << std::fixed << std::setprecision(6) << txOpp << " s\n";
+}
+
+std::cout << "\n--- MAC per node/device MPDU statistics ---\n";
+for (const auto &kv : gMpduTxPerDev)
+{
+  auto key = kv.first;
+  uint64_t tx = kv.second;
+  uint64_t retry = gMpduRetryPerDev[key];
+  uint64_t fail = gMpduFailPerDev[key];
+
+  std::cout << "Node " << key.first
+            << " | Dev " << key.second
+            << " | TX=" << tx
+            << " | Retries=" << retry
+            << " | Failures=" << fail
+            << std::endl;
+}
+
+std::cout << "\n--- MAC derived performance metrics per node/device ---\n";
+for (const auto &kv : gMpduTxPerDev)
+{
+  auto key = kv.first;
+  uint64_t tx = kv.second;
+  uint64_t fail = gMpduFailPerDev[key];
+  uint64_t totalAttempts = tx + fail;
+
+  double failureRate = 0.0;
+  double successRate = 0.0;
+
+  if (totalAttempts > 0)
+  {
+    failureRate = (static_cast<double>(fail) / totalAttempts) * 100.0;
+    successRate = (static_cast<double>(tx) / totalAttempts) * 100.0;
+  }
+
+  std::cout << "Node " << key.first
+            << " | Dev " << key.second
+            << " | Total Attempts=" << totalAttempts
+            << " | Success Rate=" << std::fixed << std::setprecision(2) << successRate << "%"
+            << " | Failure Rate=" << failureRate << "%"
+            << std::endl;
+}
+
+std::cout << "\n--- MAC Throughput per node/device ---\n";
+for (const auto &kv : gMpduTxPerDev)
+{
+  auto key = kv.first;
+  uint64_t txPackets = kv.second;
+  double throughputMbps = 0.0;
+
+  if (gSimulationTime > 0)
+  {
+    // bits per second -> megabits per second
+    throughputMbps = (txPackets * gPacketSize * 8.0) / (gSimulationTime * 1e6);
+  }
+
+  std::cout << "Node " << key.first
+            << " | Dev " << key.second
+            << " | TX Packets=" << txPackets
+            << " | Throughput=" << std::fixed << std::setprecision(6)
+            << throughputMbps << " Mbit/s\n";
+}
+
+
 
   // Clean-up
   Simulator::Destroy();
