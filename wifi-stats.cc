@@ -47,6 +47,8 @@
 #include "ns3/object-vector.h"
 #include "ns3/pointer.h"
 #include "ns3/wifi-tx-stats-helper.h"
+#include "ns3/timestamp-tag.h"
+
 
 // Exercise: 1
 //
@@ -100,17 +102,92 @@ static Time gLastRxTimeGlobal;                       // for inter-arrival
 static std::pair<uint32_t, uint32_t> ParseNodeDevFromContext(const std::string& ctx);
 static double gPhyIdleSec = 0.0, gPhyCcaSec = 0.0, gPhyTxSec = 0.0, gPhyRxSec = 0.0, gPhyOtherSec = 0.0;
 static std::map<std::pair<uint32_t, uint32_t>, double> gRxThroughputPerDev;  // throughput per receiver (Mbit/s)
+std::map<std::pair<uint32_t, uint32_t>, uint32_t> gPsduSuccessPerDev;
+static std::map<Mac48Address, uint64_t> gPhyHeaderFailed;
+static std::map<Mac48Address, uint64_t> gRxEventWhileDecoding;
+static std::map<Mac48Address, uint64_t> gRxEventAbortedByTx;
+static std::map<Mac48Address, uint64_t> gPsduSucceeded;
+static std::map<Mac48Address, uint64_t> gPsduFailed;
+static std::map<Mac48Address, uint64_t> gBlockAckRx;
+static std::map<Mac48Address, uint64_t> gBlockAckReqRx;
+static uint64_t gRxTagged = 0, gRxUntagged = 0;
 
+template <typename T>
+void IncrementCounter(std::map<Mac48Address, T>& counter, Mac48Address address)
+{
+  if (counter.find(address) == counter.end())
+  {
+    counter[address] = 1;
+  }
+  else
+  {
+    counter[address]++;
+  }
+}
 
 // --- PSDU callbacks (success & failure) ---
 
-// Correctly received PSDU
 static void
-PhyRxEndHandler(std::string /*context*/, Ptr<const Packet> /*packet*/)
+PhyRxEndHandler(std::string context, Ptr<const Packet> packet)
 {
-  gPsduSuccesses++;
-  gTotalRxEvents++;
+    // --- zliczanie globalnych sukcesów PSDU ---
+    gPsduSuccesses++;
+    gTotalRxEvents++;
+
+    auto ids = ParseNodeDevFromContext(context);
+    auto key = std::make_pair(ids.first, ids.second);
+    gPsduSuccessPerDev[key]++;
+
+    // --- szczegółowa analiza nagłówka MAC ---
+    WifiMacHeader hdr;
+    Ptr<Packet> copy = packet->Copy();
+
+    if (copy->PeekHeader(hdr))
+    {
+        Mac48Address addr;
+
+        // ACK, BlockAck, RTS, CTS → tylko adres odbiorcy (Addr1)
+        if (hdr.IsAck() || hdr.IsBlockAck() || hdr.IsCts() || hdr.IsRts())
+        {
+            addr = hdr.GetAddr1();
+        }
+        else
+        {
+            // pozostałe ramki (np. Data, Management) → adres nadawcy (Addr2)
+            addr = hdr.GetAddr2();
+        }
+
+        // pomijamy puste lub niepoprawne adresy (same zera, broadcast)
+        if (addr != Mac48Address("00:00:00:00:00:00") && addr != Mac48Address::GetBroadcast())
+        {
+            IncrementCounter(gPsduSucceeded, addr);
+
+            // zliczanie BlockAck i BlockAckReq
+            if (hdr.IsBlockAck())
+            {
+                IncrementCounter(gBlockAckRx, addr);
+            }
+            else if (hdr.IsBlockAckReq())
+            {
+                IncrementCounter(gBlockAckReqRx, addr);
+            }
+        }
+
+        // oznaczanie pakietów z/do tagiem TimestampTag
+        TimestampTag ts;
+        if (packet->PeekPacketTag(ts))
+        {
+            gRxTagged++;
+        }
+        else
+        {
+            gRxUntagged++;
+        }
+    }
 }
+
+
+
 
 static void CountTxPackets(std::string context, Ptr<const Packet> packet)
 {
@@ -120,6 +197,45 @@ static void CountTxPackets(std::string context, Ptr<const Packet> packet)
     gTxTimestampPerSeq[packet->GetUid()] = Simulator::Now();
 }
 
+static void DetailedPhyRxDropHandler(std::string context,
+                                     Ptr<const ns3::Packet> packet,
+                                     ns3::WifiPhyRxfailureReason reason)
+{
+  WifiMacHeader hdr;
+  Mac48Address addr;
+
+  if (packet)
+  {
+    Ptr<Packet> copy = packet->Copy();
+    if (copy->PeekHeader(hdr))
+    {
+      addr = hdr.GetAddr2();
+
+      switch (reason)
+      {
+        case ns3::WifiPhyRxfailureReason::L_SIG_FAILURE:
+        case ns3::WifiPhyRxfailureReason::HT_SIG_FAILURE:
+        case ns3::WifiPhyRxfailureReason::SIG_A_FAILURE:
+        case ns3::WifiPhyRxfailureReason::SIG_B_FAILURE:
+          IncrementCounter(gPhyHeaderFailed, addr);
+          break;
+
+        case ns3::WifiPhyRxfailureReason::BUSY_DECODING_PREAMBLE:
+        case ns3::WifiPhyRxfailureReason::PREAMBLE_DETECT_FAILURE:
+          IncrementCounter(gRxEventWhileDecoding, addr);
+          break;
+
+        case ns3::WifiPhyRxfailureReason::RECEPTION_ABORTED_BY_TX:
+          IncrementCounter(gRxEventAbortedByTx, addr);
+          break;
+
+        default:
+          IncrementCounter(gPsduFailed, addr);
+          break;
+      }
+    }
+  }
+}
 
 static void CountRxPackets(std::string context, Ptr<const Packet> packet)
 {
@@ -529,6 +645,12 @@ int main(int argc, char *argv[])
   "/NodeList/*/DeviceList/*/$ns3::WifiNetDevice/Phy/State/State",
   MakeCallback(&PhyStateLogger));
 
+  Config::Connect("/NodeList/*/DeviceList/*/$ns3::WifiNetDevice/Phy/PhyRxDrop",
+                MakeCallback(&DetailedPhyRxDropHandler));
+
+  Config::Connect("/NodeList/*/DeviceList/*/$ns3::WifiNetDevice/Phy/PhyRxEnd",
+                  MakeCallback(&PhyRxEndHandler));
+
 
 
 
@@ -586,6 +708,15 @@ std::cout << "PSDU successes:       " << gPsduSuccesses << "\n";
 std::cout << "PSDU failures:        " << gPsduFailures << "\n";
 std::cout << "Total RX events:       " << gTotalRxEvents << "\n";
 std::cout << "Total PHY events:      " << gTotalPhyEvents << "\n";
+
+std::cout << "\n*** PSDU Success (per receiver) ***\n";
+for (const auto& kv : gPsduSuccessPerDev)
+{
+    std::cout << "Node " << kv.first.first
+              << " | Dev " << kv.first.second
+              << " | PSDU Success = " << kv.second << std::endl;
+}
+
 
 std::cout << "\n--- Channel Utilization per node/device ---\n";
 for (const auto& kv : gTxTimePerDev)
@@ -848,6 +979,23 @@ for (const auto& kv : gFirstRxTimePerDev)
 std::cout << "\n--- Block ACK metrics ---" << std::endl;
 std::cout << "- BA total:  0" << std::endl;
 std::cout << "- BAR total: 0" << std::endl;
+
+std::cout << "\n--- Detailed Block ACK events (per MAC) ---\n";
+
+for (const auto& kv : gBlockAckRx)
+    std::cout << "Node " << kv.first << " BlockAck RX = " << kv.second << std::endl;
+
+for (const auto& kv : gBlockAckReqRx)
+    std::cout << "Node " << kv.first << " BlockAckReq RX = " << kv.second << std::endl;
+
+for (const auto& kv : gPhyHeaderFailed)
+    std::cout << "MAC " << kv.first << " PHY Header Failures = " << kv.second << std::endl;
+
+for (const auto& kv : gRxEventWhileDecoding)
+    std::cout << "MAC " << kv.first << " RX While Decoding = " << kv.second << std::endl;
+
+for (const auto& kv : gRxEventAbortedByTx)
+    std::cout << "MAC " << kv.first << " RX Aborted By TX = " << kv.second << std::endl;
 
   // Clean-up
   Simulator::Destroy();
