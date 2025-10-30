@@ -48,11 +48,6 @@
 #include "ns3/pointer.h"
 #include "ns3/wifi-tx-stats-helper.h"
 
-
-
-
-
-
 // Exercise: 1
 //
 // This is a simple scenario to measure the performance of an IEEE 802.11ax Wi-Fi network.
@@ -92,20 +87,96 @@ static std::map<std::pair<uint32_t, uint32_t>, double> gTxOppDurationPerDev;
 static std::map<std::pair<uint32_t, uint32_t>, uint64_t> gMpduTxPerDev;
 static std::map<std::pair<uint32_t, uint32_t>, uint64_t> gMpduRetryPerDev;
 static std::map<std::pair<uint32_t, uint32_t>, uint64_t> gMpduFailPerDev;
-
-
+static std::map<std::pair<uint32_t,uint32_t>, uint32_t> gTxPacketsPerDev;
+static std::map<std::pair<uint32_t,uint32_t>, uint32_t> gRxPacketsPerDev;
+static std::map<std::pair<uint32_t,uint32_t>, uint64_t> gTxBytesPerDev;
+static std::map<std::pair<uint32_t,uint32_t>, uint64_t> gRxBytesPerDev;
+static std::map<std::pair<uint32_t,uint32_t>, Time> gFirstRxTimePerDev;
+static std::map<std::pair<uint32_t,uint32_t>, Time> gLastRxTimePerDev;
+static std::map<uint64_t, Time> gTxTimestampPerSeq;  // sequence → TX time
+static std::vector<double> gInterArrivalTimes;       // for jitter
+static std::vector<double> gDelays;                  // for delay
+static Time gLastRxTimeGlobal;                       // for inter-arrival
 static std::pair<uint32_t, uint32_t> ParseNodeDevFromContext(const std::string& ctx);
-
 static double gPhyIdleSec = 0.0, gPhyCcaSec = 0.0, gPhyTxSec = 0.0, gPhyRxSec = 0.0, gPhyOtherSec = 0.0;
+static std::map<std::pair<uint32_t, uint32_t>, double> gRxThroughputPerDev;  // throughput per receiver (Mbit/s)
+
 
 // --- PSDU callbacks (success & failure) ---
 
-// Poprawnie odebrany PSDU
+// Correctly received PSDU
 static void
 PhyRxEndHandler(std::string /*context*/, Ptr<const Packet> /*packet*/)
 {
   gPsduSuccesses++;
   gTotalRxEvents++;
+}
+
+static void CountTxPackets(std::string context, Ptr<const Packet> packet)
+{
+    auto key = ParseNodeDevFromContext(context);
+    gTxPacketsPerDev[key]++;
+    gTxBytesPerDev[key] += packet->GetSize();
+    gTxTimestampPerSeq[packet->GetUid()] = Simulator::Now();
+}
+
+
+static void CountRxPackets(std::string context, Ptr<const Packet> packet)
+{
+    auto key = ParseNodeDevFromContext(context);
+    gRxPacketsPerDev[key]++;
+    gRxBytesPerDev[key] += packet->GetSize();
+
+    Time now = Simulator::Now();
+    if (gFirstRxTimePerDev.find(key) == gFirstRxTimePerDev.end())
+    {
+        gFirstRxTimePerDev[key] = now;
+    }
+    gLastRxTimePerDev[key] = now;
+
+        // --- Compute one-way delay if TX timestamp known ---
+    auto txIt = gTxTimestampPerSeq.find(packet->GetUid());
+    if (txIt != gTxTimestampPerSeq.end())
+    {
+        double delay = (Simulator::Now() - txIt->second).GetSeconds();
+        gDelays.push_back(delay);
+    }
+
+    // --- Compute inter-arrival time for jitter ---
+    if (gLastRxTimeGlobal.IsZero())
+    {
+        gLastRxTimeGlobal = Simulator::Now();
+    }
+    else
+    {
+        double iat = (Simulator::Now() - gLastRxTimeGlobal).GetSeconds();
+        gInterArrivalTimes.push_back(iat);
+        gLastRxTimeGlobal = Simulator::Now();
+    }
+
+}
+
+
+void MyRxMonitorSnifferCallback(std::string context,
+                                Ptr<const Packet> packet,
+                                uint16_t channelFreqMhz,
+                                WifiTxVector txVector,
+                                MpduInfo aMpdu,
+                                SignalNoiseDbm signalNoise,
+                                uint16_t staId)
+{
+    auto ids = ParseNodeDevFromContext(context);
+    uint32_t nodeId = ids.first;
+    uint32_t devId = ids.second;
+
+    auto key = std::make_pair(nodeId, devId);
+    Time now = Simulator::Now();
+
+    if (gFirstRxTimePerDev.find(key) == gFirstRxTimePerDev.end())
+    {
+        gFirstRxTimePerDev[key] = now;
+    }
+    gLastRxTimePerDev[key] = now;
 }
 
 
@@ -128,14 +199,12 @@ PhyRxDropHandler(std::string /*context*/, Ptr<const Packet> /*packet*/, WifiPhyR
       gRxWhileDecoding++;
       break;
 
-    // --- Odbiór przerwany przez rozpoczęcie transmisji TX ---
+    // --- Reception aborted by the start of a TX transmission ---
     case WifiPhyRxfailureReason::RECEPTION_ABORTED_BY_TX:
       gRxAbortedByTx++;
       break;
 
-
-
-    // --- Faktyczne PSDU-level failures ---
+    // Actual PSDU-level failures
     default:
       gPsduFailures++;
       break;
@@ -214,14 +283,12 @@ static std::pair<uint32_t, uint32_t> ParseNodeDevFromContext(const std::string& 
   return {nodeId, devId};
 }
 
-
-
 void PopulateARPcache ()
 {
   Ptr<ArpCache> arp = CreateObject<ArpCache> ();
   arp->SetAliveTimeout (Seconds (3600 * 24 * 365));
 
-  // Tworzymy wpisy ARP dla każdego interfejsu
+  // Create ARP entries for each interface
   for (auto i = NodeList::Begin (); i != NodeList::End (); ++i)
     {
       Ptr<Ipv4L3Protocol> ip = (*i)->GetObject<Ipv4L3Protocol> ();
@@ -251,12 +318,12 @@ void PopulateARPcache ()
               Ptr<Packet> p = Create<Packet> (100);
               entry->MarkWaitReply (ArpCache::Ipv4PayloadHeaderPair (p, ipv4Hdr));
               entry->MarkAlive (addr);
-              entry->MarkPermanent (); // wpis stały
+              entry->MarkPermanent ();
             }
         }
     }
 
-  // Przypisz cache do wszystkich interfejsów
+  // Assign the cache to all interfaces
   for (auto i = NodeList::Begin (); i != NodeList::End (); ++i)
     {
       Ptr<Ipv4L3Protocol> ip = (*i)->GetObject<Ipv4L3Protocol> ();
@@ -391,7 +458,7 @@ int main(int argc, char *argv[])
     ApplicationContainer sourceApplications, sinkApplications;
     const uint16_t portNumber = 9;
 
-    // --- Sink na AP ---
+    // --- Sink on AP ---
     auto apIpv4 = wifiApNode.Get(0)->GetObject<Ipv4>();
     Ipv4Address apAddr = apIpv4->GetAddress(1, 0).GetLocal();
     InetSocketAddress sinkSocket(apAddr, portNumber);
@@ -399,7 +466,7 @@ int main(int argc, char *argv[])
     PacketSinkHelper packetSinkHelper("ns3::UdpSocketFactory", sinkSocket);
     sinkApplications.Add(packetSinkHelper.Install(wifiApNode.Get(0)));
 
-    // --- Klient tylko na pierwszej stacji: 1 pakiet ---
+    // --- Client only on the first station: 1 packet ---
     UdpClientHelper client(sinkSocket);
     client.SetAttribute("MaxPackets", UintegerValue(maxPackets));
     client.SetAttribute("Interval", TimeValue(Seconds(interval)));
@@ -407,13 +474,6 @@ int main(int argc, char *argv[])
 
 
     sourceApplications.Add(client.Install(wifiStaNodes.Get(0)));
-
-    // --- Timingi ---
-    sinkApplications.Start(Seconds(0.0));
-    sinkApplications.Stop(Seconds(simulationTime + 1));
-    sourceApplications.Start(Seconds(1.0));
-    sourceApplications.Stop(Seconds(simulationTime + 1));
-
 
   // Configure application start/stop times
   // Note:
@@ -435,10 +495,9 @@ int main(int argc, char *argv[])
   // Record start time
   auto start = std::chrono::high_resolution_clock::now();
 
-  Config::ConnectWithoutContext(
-  "/NodeList/*/DeviceList/*/$ns3::WifiNetDevice/Phy/State/State",
-  MakeCallback(&PhyStateLogger)
-  );
+  Config::Connect("/NodeList/*/DeviceList/*/$ns3::WifiNetDevice/Phy/MonitorSnifferRx",
+                MakeCallback(&MyRxMonitorSnifferCallback));
+
 
   // --- PHY PSDU success/failure tracking ---
   Config::Connect("/NodeList/*/DeviceList/*/$ns3::WifiNetDevice/Phy/PhyRxEnd",
@@ -457,9 +516,20 @@ int main(int argc, char *argv[])
   "/NodeList/*/DeviceList/*/$ns3::WifiNetDevice/Mac/MacTx",
   MakeCallback(&MacTxSuccessPerDev));
 
-Config::Connect(
+  Config::Connect(
   "/NodeList/*/DeviceList/*/$ns3::WifiNetDevice/Mac/MacTxDrop",
   MakeCallback(&MacTxFailPerDev));
+
+  Config::Connect("/NodeList/*/DeviceList/*/$ns3::WifiNetDevice/Mac/MacTx",
+                MakeCallback(&CountTxPackets));
+  Config::Connect("/NodeList/*/DeviceList/*/$ns3::WifiNetDevice/Mac/MacRx",
+                MakeCallback(&CountRxPackets));
+
+  Config::ConnectWithoutContext(
+  "/NodeList/*/DeviceList/*/$ns3::WifiNetDevice/Phy/State/State",
+  MakeCallback(&PhyStateLogger));
+
+
 
 
   // Run the simulation!
@@ -520,22 +590,29 @@ std::cout << "Total PHY events:      " << gTotalPhyEvents << "\n";
 std::cout << "\n--- Channel Utilization per node/device ---\n";
 for (const auto& kv : gTxTimePerDev)
 {
-  auto key = kv.first;
-  double tx = kv.second;
-  double rx = gRxTimePerDev[key];
-  double cca = gCcaTimePerDev[key];
-  double busy = tx + rx + cca;
-  double totalSimTime = simulationTime + 1.0; // tak jak w Twoim Simulator::Stop
-  double utilPct = (busy / totalSimTime) * 100.0;
+    auto key = kv.first;
+    double tx = kv.second;
+    double rx = gRxTimePerDev[key];
+    double cca = gCcaTimePerDev[key];
+    double busy = tx + rx + cca;
+    double totalSimTime = simulationTime + 1.0;
+    double utilPct = (busy / totalSimTime) * 100.0;
+    double txPct = (tx / totalSimTime) * 100.0;
+    double rxPct = (rx / totalSimTime) * 100.0;
+    double ccaPct = (cca / totalSimTime) * 100.0;
 
-  std::cout << "Node " << key.first
-            << " | Dev " << key.second
-            << " | TX=" << std::fixed << std::setprecision(6) << tx
-            << " s, RX=" << rx
-            << " s, CCA=" << cca
-            << " s | Utilization=" << std::setprecision(2)
-            << utilPct << " %\n";
+    std::cout << "Node " << key.first
+              << " | Dev " << key.second
+              << " | TX=" << std::fixed << std::setprecision(6) << tx
+              << " s (" << std::setprecision(2) << txPct << "%)"
+              << ", RX=" << std::fixed << std::setprecision(6) << rx
+              << " s (" << std::setprecision(2) << rxPct << "%)"
+              << ", CCA=" << std::fixed << std::setprecision(6) << cca
+              << " s (" << std::setprecision(2) << ccaPct << "%)"
+              << " | Utilization=" << std::setprecision(2)
+              << utilPct << " %\n";
 }
+
 
 std::cout << "\n--- Tx Opportunity Duration per node/device ---\n";
 for (const auto& kv : gTxOppDurationPerDev)
@@ -609,7 +686,168 @@ for (const auto &kv : gMpduTxPerDev)
             << throughputMbps << " Mbit/s\n";
 }
 
+std::cout << "\n--- Network/Application layer statistics ---\n";
+for (auto &entry : gTxPacketsPerDev)
+{
+    uint32_t node = entry.first.first;
+    uint32_t dev = entry.first.second;
+    std::cout << "Node " << node << " | Dev " << dev
+              << " | Packets TX=" << gTxPacketsPerDev[entry.first]
+              << " (" << gTxBytesPerDev[entry.first] << " bytes)"
+              << " | RX=" << gRxPacketsPerDev[entry.first]
+              << " (" << gRxBytesPerDev[entry.first] << " bytes)"
+              << std::endl;
+}
 
+std::cout << "\n--- Packet loss and timing statistics ---\n";
+uint64_t totalSent = 0, totalReceived = 0;
+
+for (const auto &entry : gTxPacketsPerDev)
+{
+    auto key = entry.first;
+    uint64_t sent = gTxPacketsPerDev[key];
+    uint64_t received = gRxPacketsPerDev[key];
+    uint64_t lost = (sent > received) ? (sent - received) : 0;
+    double lossRatio = 0.0;
+
+    if (sent > 0)
+    {
+        lossRatio = (static_cast<double>(lost) / sent) * 100.0;
+    }
+
+    totalSent += sent;
+    totalReceived += received;
+
+    std::cout << "Node " << key.first << " | Dev " << key.second
+              << " | Sent=" << sent
+              << " | Received=" << received
+              << " | Lost=" << lost
+              << " | Loss Ratio=" << std::fixed << std::setprecision(2) << lossRatio << "%"
+              << std::endl;
+
+    if (gFirstRxTimePerDev.find(key) != gFirstRxTimePerDev.end())
+    {
+        double firstRx = gFirstRxTimePerDev[key].GetSeconds();
+        double lastRx = gLastRxTimePerDev[key].GetSeconds();
+        double duration = lastRx - firstRx;
+
+        std::cout << "   ↳ First RX=" << firstRx << " s"
+                  << ", Last RX=" << lastRx << " s"
+                  << ", Data transfer duration=" << duration << " s"
+                  << std::endl;
+    }
+}
+
+uint64_t totalLost = (totalSent > totalReceived) ? (totalSent - totalReceived) : 0;
+double totalLossRatio = (totalSent > 0) ? (static_cast<double>(totalLost) / totalSent) * 100.0 : 0.0;
+
+std::cout << "\nAggregate Packet Stats: Sent=" << totalSent
+          << ", Received=" << totalReceived
+          << ", Lost=" << totalLost
+          << ", Loss Ratio=" << totalLossRatio << "%\n";
+
+std::cout << "\n--- Data transfer duration per receiver (MAC) ---" << std::endl;
+for (const auto& kv : gFirstRxTimePerDev)
+{
+    auto key = kv.first;
+    double duration = (gLastRxTimePerDev[key] - kv.second).GetSeconds();
+
+    if (duration <= 0.0)
+        continue;
+
+    std::cout << "Node " << key.first << " | Dev " << key.second
+              << " | Data transfer duration = "
+              << std::fixed;
+    if (duration < 0.01)
+        std::cout << std::setprecision(3) << duration * 1e6 << " µs";
+    else
+        std::cout << std::setprecision(6) << duration << " s";
+    std::cout << std::endl;
+}
+
+std::cout << "\n--- Delay and Jitter statistics ---\n";
+
+// Average delay
+if (!gDelays.empty())
+{
+    double sumDelay = std::accumulate(gDelays.begin(), gDelays.end(), 0.0);
+    double avgDelay = sumDelay / gDelays.size();
+
+    std::cout << "Average delay: "
+              << std::fixed << std::setprecision(3)
+              << (avgDelay < 0.01 ? avgDelay * 1e6 : avgDelay)
+              << (avgDelay < 0.01 ? " µs" : " s") << std::endl;
+}
+else
+{
+    std::cout << "Average delay: N/A (no received packets)\n";
+}
+
+
+// Jitter (standard deviation of inter-arrival times)
+if (gInterArrivalTimes.size() > 1)
+{
+    double meanIAT = std::accumulate(gInterArrivalTimes.begin(), gInterArrivalTimes.end(), 0.0) / gInterArrivalTimes.size();
+    double sqSum = 0.0;
+    for (double val : gInterArrivalTimes)
+        sqSum += std::pow(val - meanIAT, 2);
+    double jitter = std::sqrt(sqSum / (gInterArrivalTimes.size() - 1));
+
+    std::cout << "Jitter (IAT std dev): "
+              << std::fixed << std::setprecision(3)
+              << (jitter < 0.01 ? jitter * 1e6 : jitter)
+              << (jitter < 0.01 ? " µs" : " s") << std::endl;
+}
+else
+{
+    std::cout << "Jitter (IAT std dev): N/A (too few packets)\n";
+}
+
+
+std::cout << "\n--- Receiver-side throughput statistics ---\n";
+
+double aggregateRxThroughput = 0.0;
+for (auto& kv : gRxBytesPerDev)
+{
+    auto [nodeId, devId] = kv.first;
+    double bytes = static_cast<double>(kv.second);
+    double throughputMbps = (bytes * 8.0) / (simulationTime * 1e6);  // Mbit/s
+    gRxThroughputPerDev[{nodeId, devId}] = throughputMbps;
+    aggregateRxThroughput += throughputMbps;
+
+    std::cout << "Node " << nodeId
+              << " | Dev " << devId
+              << " | RX Throughput = "
+              << std::fixed << std::setprecision(6)
+              << throughputMbps << " Mbit/s" << std::endl;
+
+}
+
+std::cout << "Aggregate RX Throughput = "
+          << std::fixed << std::setprecision(6)
+          << aggregateRxThroughput << " Mbit/s" << std::endl;
+
+
+std::cout << "\n--- RX timing per node/device ---" << std::endl;
+for (const auto& kv : gFirstRxTimePerDev)
+{
+    uint32_t nodeId = kv.first.first;
+    uint32_t devId = kv.first.second;
+    double first = kv.second.GetSeconds();
+    double last = gLastRxTimePerDev.count(kv.first) ? gLastRxTimePerDev.at(kv.first).GetSeconds() : first;
+    double duration = std::max(0.0, last - first);
+
+    std::cout << "Node " << nodeId << " | Dev " << devId
+              << " | First RX=" << std::fixed << std::setprecision(6) << first << " s"
+              << " | Last RX=" << last << " s"
+              << " | Duration=" << duration << " s"
+              << std::endl;
+}
+
+// --- Block ACK metrics ---
+std::cout << "\n--- Block ACK metrics ---" << std::endl;
+std::cout << "- BA total:  0" << std::endl;
+std::cout << "- BAR total: 0" << std::endl;
 
   // Clean-up
   Simulator::Destroy();
