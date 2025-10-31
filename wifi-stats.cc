@@ -111,6 +111,9 @@ static std::map<Mac48Address, uint64_t> gPsduFailed;
 static std::map<Mac48Address, uint64_t> gBlockAckRx;
 static std::map<Mac48Address, uint64_t> gBlockAckReqRx;
 static uint64_t gRxTagged = 0, gRxUntagged = 0;
+std::map<std::pair<uint32_t, uint32_t>, uint32_t> gTxAttemptsPerDev;
+std::map<std::pair<uint32_t, uint32_t>, uint32_t> gRetriesPerDev;
+std::map<std::pair<uint32_t, uint32_t>, uint32_t> gFailuresPerDev;
 
 template <typename T>
 void IncrementCounter(std::map<Mac48Address, T>& counter, Mac48Address address)
@@ -342,6 +345,23 @@ MacTxFailPerDev(std::string context, Ptr<const Packet> p)
   gMpduFailPerDev[key]++;
 }
 
+void MacTxOkHandler(std::string context, Ptr<const Packet> packet)
+{
+    auto ids = ParseNodeDevFromContext(context);
+    gTxAttemptsPerDev[ids]++;
+}
+
+void MacRetryHandler(std::string context, Ptr<const Packet> packet)
+{
+    auto ids = ParseNodeDevFromContext(context);
+    gRetriesPerDev[ids]++;
+}
+
+void MacTxFailedHandler(std::string context, Ptr<const Packet> packet)
+{
+    auto ids = ParseNodeDevFromContext(context);
+    gFailuresPerDev[ids]++;
+}
 
 
 static void
@@ -651,6 +671,13 @@ int main(int argc, char *argv[])
   Config::Connect("/NodeList/*/DeviceList/*/$ns3::WifiNetDevice/Phy/PhyRxEnd",
                   MakeCallback(&PhyRxEndHandler));
 
+  Config::Connect("/NodeList/*/DeviceList/*/$ns3::WifiNetDevice/Mac/MacTx",
+                  MakeCallback(&MacTxOkHandler));
+  Config::Connect("/NodeList/*/DeviceList/*/$ns3::WifiNetDevice/Mac/MacTxDrop",
+                  MakeCallback(&MacTxFailedHandler));
+
+  Config::Connect("/NodeList/*/DeviceList/*/$ns3::WifiNetDevice/Mac/MacTxDrop",
+                  MakeCallback(&MacRetryHandler));
 
 
 
@@ -688,6 +715,26 @@ int main(int argc, char *argv[])
   std::cout << "Channel Utilization: " << std::fixed << std::setprecision(2)
             << (util * 100.0) << " %\n";
 }
+
+std::cout << "\n=== PHY layer (time share per node/device) ===\n";
+for (const auto& kv : gTxTimePerDev)
+{
+    auto key = kv.first;
+    double tx  = gTxTimePerDev[key];
+    double rx  = gRxTimePerDev[key];
+    double cca = gCcaTimePerDev[key];
+    double totalSimTime = simulationTime + 1.0;
+    double idle = totalSimTime - (tx + rx + cca);
+    if (idle < 0) idle = 0.0;
+
+    std::cout << "Node " << key.first << " | Dev " << key.second << "\n";
+    std::cout << "IDLE:      " << std::fixed << std::setprecision(6) << idle << " s\n";
+    std::cout << "CCA_BUSY:  " << cca << " s\n";
+    std::cout << "TX:        " << tx  << " s\n";
+    std::cout << "RX:        " << rx  << " s\n";
+    std::cout << "OTHER:     0 s\n\n";
+}
+
 
 // --- MAC layer (MPDU) statistics ---
 std::cout << std::endl << "=== MAC layer (MPDU) statistics ===" << std::endl;
@@ -771,6 +818,35 @@ for (const auto &kv : gMpduTxPerDev)
             << " | Failures=" << fail
             << std::endl;
 }
+
+std::cout << "\n--- MAC aggregate transmission statistics ---\n";
+uint32_t totalTxAttempts = 0;
+uint32_t totalRetries = 0;
+uint32_t totalFailures = 0;
+
+for (uint32_t i = 0; i < NodeList::GetNNodes(); ++i)
+{
+    Ptr<Node> node = NodeList::GetNode(i);
+    for (uint32_t j = 0; j < node->GetNDevices(); ++j)
+    {
+        Ptr<NetDevice> dev = node->GetDevice(j);
+        Ptr<WifiNetDevice> wifiDev = DynamicCast<WifiNetDevice>(dev);
+        if (!wifiDev) continue;
+
+        auto key = std::make_pair(i, j);
+        if (gTxAttemptsPerDev.count(key))
+            totalTxAttempts += gTxAttemptsPerDev[key];
+        if (gRetriesPerDev.count(key))
+            totalRetries += gRetriesPerDev[key];
+        if (gFailuresPerDev.count(key))
+            totalFailures += gFailuresPerDev[key];
+    }
+}
+
+std::cout << "Tx Attempts (aggregate): " << totalTxAttempts << std::endl;
+std::cout << "Tx Retries (aggregate):  " << totalRetries << std::endl;
+std::cout << "Tx Failures (aggregate): " << totalFailures << std::endl;
+
 
 std::cout << "\n--- MAC derived performance metrics per node/device ---\n";
 for (const auto &kv : gMpduTxPerDev)
@@ -996,6 +1072,30 @@ for (const auto& kv : gRxEventWhileDecoding)
 
 for (const auto& kv : gRxEventAbortedByTx)
     std::cout << "MAC " << kv.first << " RX Aborted By TX = " << kv.second << std::endl;
+
+// --- Total RX events per receiver (PSDU-based) ---
+uint32_t totalPsduSuccess = 0;
+for (const auto& entry : gPsduSuccessPerDev)
+{
+    totalPsduSuccess += entry.second;
+}
+std::cout << "Total RX events per receiver (PSDU-based): "
+          << totalPsduSuccess << std::endl;
+
+// --- Aggregate Data Transfer Duration (all) ---
+double totalDataTransferDuration = 0.0;
+for (const auto& kv : gFirstRxTimePerDev)
+{
+    double duration = (gLastRxTimePerDev[kv.first] - kv.second).GetSeconds();
+    if (duration > 0.0)
+    {
+        totalDataTransferDuration += duration;
+    }
+}
+std::cout << "Aggregate Data Transfer Duration (all): "
+          << std::fixed << std::setprecision(6)
+          << totalDataTransferDuration << " s" << std::endl;
+
 
   // Clean-up
   Simulator::Destroy();
