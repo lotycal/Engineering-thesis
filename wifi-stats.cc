@@ -1011,51 +1011,62 @@ for (auto &entry : gTxPacketsPerDev)
 }
 
 std::cout << "\n--- Packet loss and timing statistics ---\n";
-uint64_t totalSent = 0, totalReceived = 0;
 
-for (const auto &entry : gTxPacketsPerDev)
-{
-    auto key = entry.first;
-    uint64_t sent = gTxPacketsPerDev[key];
-    uint64_t received = gRxPacketsPerDev[key];
-    uint64_t lost = (sent > received) ? (sent - received) : 0;
-    double lossRatio = 0.0;
-
-    if (sent > 0)
-    {
-        lossRatio = (static_cast<double>(lost) / sent) * 100.0;
-    }
-
-    totalSent += sent;
-    totalReceived += received;
-
+// Per-sender
+std::cout << "[Per sender]\n";
+for (const auto& entry : gTxPacketsPerDev) {
+    const auto& key = entry.first;
+    uint64_t sent = entry.second;
     std::cout << "Node " << key.first << " | Dev " << key.second
-              << " | Sent=" << sent
-              << " | Received=" << received
-              << " | Lost=" << lost
-              << " | Loss Ratio=" << std::fixed << std::setprecision(2) << lossRatio << "%"
-              << std::endl;
+              << " | Sent=" << sent << "\n";
+}
 
-    if (gFirstRxTimePerDev.find(key) != gFirstRxTimePerDev.end())
-    {
-        double firstRx = gFirstRxTimePerDev[key].GetSeconds();
-        double lastRx = gLastRxTimePerDev[key].GetSeconds();
-        double duration = lastRx - firstRx;
+// Per-receiver
+std::cout << "[Per receiver]\n";
+for (const auto& entry : gRxPacketsPerDev) {
+    const auto& key = entry.first;
+    uint64_t received = entry.second;
+    std::cout << "Node " << key.first << " | Dev " << key.second
+              << " | Received=" << received << "\n";
 
-        std::cout << "   ↳ First RX=" << firstRx << " s"
-                  << ", Last RX=" << lastRx << " s"
-                  << ", Data transfer duration=" << duration << " s"
-                  << std::endl;
+    if (gFirstRxTimePerDev.count(key) && gLastRxTimePerDev.count(key)) {
+        double firstRx = gFirstRxTimePerDev.at(key).GetSeconds();
+        double lastRx  = gLastRxTimePerDev.at(key).GetSeconds();
+        double duration = std::max(0.0, lastRx - firstRx);
+        std::cout << "   ↳ First RX=" << firstRx
+                  << " s, Last RX=" << lastRx
+                  << " s, Data transfer duration=" << duration << " s\n";
     }
 }
 
+// Global totals
+uint64_t totalSent = 0, totalReceived = 0;
+for (const auto& e : gTxPacketsPerDev) totalSent += e.second;
+for (const auto& e : gRxPacketsPerDev) totalReceived += e.second;
+
 uint64_t totalLost = (totalSent > totalReceived) ? (totalSent - totalReceived) : 0;
-double totalLossRatio = (totalSent > 0) ? (static_cast<double>(totalLost) / totalSent) * 100.0 : 0.0;
+double totalLossRatio = (totalSent > 0)
+    ? (static_cast<double>(totalLost) / totalSent) * 100.0
+    : 0.0;
 
 std::cout << "\nAggregate Packet Stats: Sent=" << totalSent
           << ", Received=" << totalReceived
           << ", Lost=" << totalLost
-          << ", Loss Ratio=" << totalLossRatio << "%\n";
+          << ", Loss Ratio=" << std::fixed << std::setprecision(2)
+          << totalLossRatio << "%\n";
+
+
+uint64_t totalLost2 = (totalSent > totalReceived) ? (totalSent - totalReceived) : 0;
+double totalLossRatio2 = (totalSent > 0)
+    ? (static_cast<double>(totalLost2) / totalSent) * 100.0
+    : 0.0;
+
+std::cout << "\nAggregate Packet Stats: Sent=" << totalSent
+          << ", Received=" << totalReceived
+          << ", Lost=" << totalLost2
+          << ", Loss Ratio=" << std::fixed << std::setprecision(2)
+          << totalLossRatio2 << "%\n";
+
 
 std::cout << "\n--- Data transfer duration per receiver (MAC) ---" << std::endl;
 for (const auto& kv : gFirstRxTimePerDev)
