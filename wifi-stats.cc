@@ -114,6 +114,27 @@ static uint64_t gRxTagged = 0, gRxUntagged = 0;
 std::map<std::pair<uint32_t, uint32_t>, uint32_t> gTxAttemptsPerDev;
 std::map<std::pair<uint32_t, uint32_t>, uint32_t> gRetriesPerDev;
 std::map<std::pair<uint32_t, uint32_t>, uint32_t> gFailuresPerDev;
+static uint64_t gDroppedDataFrames = 0;
+static uint64_t gDroppedAckFrames = 0;
+static uint64_t gDroppedRtsFrames = 0;
+static uint64_t gDroppedCtsFrames = 0;
+static uint64_t gDroppedBlockAckFrames = 0;
+// --- Counters for all received frame types (successful reception) ---
+static uint64_t gTotalDataFrames = 0;
+static uint64_t gTotalAckFrames = 0;
+static uint64_t gTotalRtsFrames = 0;
+static uint64_t gTotalCtsFrames = 0;
+static uint64_t gTotalBlockAckFrames = 0;
+// --- Counters for transmitted frame types (successful PHY TX) ---
+static uint64_t gTotalTxDataFrames = 0;
+static uint64_t gTotalTxAckFrames = 0;
+static uint64_t gTotalTxRtsFrames = 0;
+static uint64_t gTotalTxCtsFrames = 0;
+static uint64_t gTotalTxBlockAckFrames = 0;
+
+
+
+
 
 template <typename T>
 void IncrementCounter(std::map<Mac48Address, T>& counter, Mac48Address address)
@@ -148,6 +169,28 @@ PhyRxEndHandler(std::string context, Ptr<const Packet> packet)
     if (copy->PeekHeader(hdr))
     {
         Mac48Address addr;
+
+                // --- classify received frame type ---
+        if (hdr.IsData())
+        {
+            gTotalDataFrames++;
+        }
+        else if (hdr.IsAck())
+        {
+            gTotalAckFrames++;
+        }
+        else if (hdr.IsRts())
+        {
+            gTotalRtsFrames++;
+        }
+        else if (hdr.IsCts())
+        {
+            gTotalCtsFrames++;
+        }
+        else if (hdr.IsBlockAck())
+        {
+            gTotalBlockAckFrames++;
+        }
 
         // ACK, BlockAck, RTS, CTS → tylko adres odbiorcy (Addr1)
         if (hdr.IsAck() || hdr.IsBlockAck() || hdr.IsCts() || hdr.IsRts())
@@ -190,6 +233,36 @@ PhyRxEndHandler(std::string context, Ptr<const Packet> packet)
 }
 
 
+// === PHY TX End Handler ===
+static void
+PhyTxEndHandler(std::string context, Ptr<const Packet> packet)
+{
+    WifiMacHeader hdr;
+    Ptr<Packet> copy = packet->Copy();
+    if (copy->PeekHeader(hdr))
+    {
+        if (hdr.IsData())
+        {
+            gTotalTxDataFrames++;
+        }
+        else if (hdr.IsAck())
+        {
+            gTotalTxAckFrames++;
+        }
+        else if (hdr.IsRts())
+        {
+            gTotalTxRtsFrames++;
+        }
+        else if (hdr.IsCts())
+        {
+            gTotalTxCtsFrames++;
+        }
+        else if (hdr.IsBlockAck())
+        {
+            gTotalTxBlockAckFrames++;
+        }
+    }
+}
 
 
 static void CountTxPackets(std::string context, Ptr<const Packet> packet)
@@ -214,6 +287,29 @@ static void DetailedPhyRxDropHandler(std::string context,
     {
       addr = hdr.GetAddr2();
 
+      // --- classify frame type ---
+      if (hdr.IsData())
+      {
+        gDroppedDataFrames++;
+      }
+      else if (hdr.IsAck())
+      {
+        gDroppedAckFrames++;
+      }
+      else if (hdr.IsRts())
+      {
+        gDroppedRtsFrames++;
+      }
+      else if (hdr.IsCts())
+      {
+        gDroppedCtsFrames++;
+      }
+      else if (hdr.IsBlockAck())
+      {
+        gDroppedBlockAckFrames++;
+      }
+
+      // --- existing reason-based counting ---
       switch (reason)
       {
         case ns3::WifiPhyRxfailureReason::L_SIG_FAILURE:
@@ -239,6 +335,7 @@ static void DetailedPhyRxDropHandler(std::string context,
     }
   }
 }
+
 
 static void CountRxPackets(std::string context, Ptr<const Packet> packet)
 {
@@ -525,6 +622,9 @@ int main(int argc, char *argv[])
   YansWifiPhyHelper phy;
   phy.SetChannel(channel.Create());
 
+  Config::SetDefault("ns3::WifiRemoteStationManager::RtsCtsThreshold", UintegerValue(0));
+
+
   // Create and configure Wi-Fi network
   WifiMacHelper mac;
   WifiHelper wifi;
@@ -668,6 +768,9 @@ int main(int argc, char *argv[])
   Config::Connect("/NodeList/*/DeviceList/*/$ns3::WifiNetDevice/Phy/PhyRxDrop",
                 MakeCallback(&DetailedPhyRxDropHandler));
 
+  Config::Connect("/NodeList/*/DeviceList/*/$ns3::WifiNetDevice/Phy/PhyTxEnd",
+                MakeCallback(&PhyTxEndHandler));
+
   Config::Connect("/NodeList/*/DeviceList/*/$ns3::WifiNetDevice/Phy/PhyRxEnd",
                   MakeCallback(&PhyRxEndHandler));
 
@@ -678,6 +781,8 @@ int main(int argc, char *argv[])
 
   Config::Connect("/NodeList/*/DeviceList/*/$ns3::WifiNetDevice/Mac/MacTxDrop",
                   MakeCallback(&MacRetryHandler));
+
+
 
 
 
@@ -882,7 +987,6 @@ for (const auto &kv : gMpduTxPerDev)
 
   if (gSimulationTime > 0)
   {
-    // bits per second -> megabits per second
     throughputMbps = (txPackets * gPacketSize * 8.0) / (gSimulationTime * 1e6);
   }
 
@@ -1095,6 +1199,27 @@ for (const auto& kv : gFirstRxTimePerDev)
 std::cout << "Aggregate Data Transfer Duration (all): "
           << std::fixed << std::setprecision(6)
           << totalDataTransferDuration << " s" << std::endl;
+
+std::cout << "\n--- Dropped frame types (PHY RX drop classification) ---" << std::endl;
+std::cout << "Dropped DATA frames:      " << gDroppedDataFrames << std::endl;
+std::cout << "Dropped ACK frames:       " << gDroppedAckFrames << std::endl;
+std::cout << "Dropped RTS frames:       " << gDroppedRtsFrames << std::endl;
+std::cout << "Dropped CTS frames:       " << gDroppedCtsFrames << std::endl;
+std::cout << "Dropped BlockAck frames:  " << gDroppedBlockAckFrames << std::endl;
+
+std::cout << "\n--- Received frame types (PHY RX end classification) ---" << std::endl;
+std::cout << "Received DATA frames:      " << gTotalDataFrames << std::endl;
+std::cout << "Received ACK frames:       " << gTotalAckFrames << std::endl;
+std::cout << "Received RTS frames:       " << gTotalRtsFrames << std::endl;
+std::cout << "Received CTS frames:       " << gTotalCtsFrames << std::endl;
+std::cout << "Received BlockAck frames:  " << gTotalBlockAckFrames << std::endl;
+
+std::cout << "\n--- Transmitted frame types (PHY TX classification) ---" << std::endl;
+std::cout << "Transmitted DATA frames:      " << gTotalTxDataFrames << std::endl;
+std::cout << "Transmitted ACK frames:       " << gTotalTxAckFrames << std::endl;
+std::cout << "Transmitted RTS frames:       " << gTotalTxRtsFrames << std::endl;
+std::cout << "Transmitted CTS frames:       " << gTotalTxCtsFrames << std::endl;
+std::cout << "Transmitted BlockAck frames:  " << gTotalTxBlockAckFrames << std::endl;
 
 
   // Clean-up
