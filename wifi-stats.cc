@@ -101,7 +101,6 @@ static std::vector<double> gInterArrivalTimes;       // for jitter
 static std::vector<double> gDelays;                  // for delay
 static Time gLastRxTimeGlobal;                       // for inter-arrival
 static std::pair<uint32_t, uint32_t> ParseNodeDevFromContext(const std::string& ctx);
-static double gPhyIdleSec = 0.0, gPhyCcaSec = 0.0, gPhyTxSec = 0.0, gPhyRxSec = 0.0, gPhyOtherSec = 0.0;
 static std::map<std::pair<uint32_t, uint32_t>, double> gRxThroughputPerDev;  // throughput per receiver (Mbit/s)
 std::map<std::pair<uint32_t, uint32_t>, uint32_t> gPsduSuccessPerDev;
 static std::map<Mac48Address, uint64_t> gPhyHeaderFailed;
@@ -132,6 +131,8 @@ static uint64_t gTotalTxAckFrames = 0;
 static uint64_t gTotalTxRtsFrames = 0;
 static uint64_t gTotalTxCtsFrames = 0;
 static uint64_t gTotalTxBlockAckFrames = 0;
+static std::map<std::pair<uint32_t, uint32_t>, double> gIdleTimePerDev;
+
 
 
 
@@ -470,6 +471,10 @@ PerDevicePhyStateTracker(std::string context, Time /*start*/, Time duration, Wif
 
   switch (state)
   {
+    case WifiPhyState::IDLE:
+      gIdleTimePerDev[key] += d;
+      break;
+
     case WifiPhyState::TX:
       gTxTimePerDev[key] += d;
       gTxOppDurationPerDev[key] += d;
@@ -485,22 +490,6 @@ PerDevicePhyStateTracker(std::string context, Time /*start*/, Time duration, Wif
 
     default:
       break;
-  }
-}
-
-
-
-static void PhyStateLogger(ns3::Time /*start*/, ns3::Time duration, ns3::WifiPhyState state)
-{
-  gTotalPhyEvents++;
-  const double d = duration.GetSeconds();
-  switch (state)
-  {
-    case ns3::WifiPhyState::IDLE:      gPhyIdleSec += d; break;
-    case ns3::WifiPhyState::CCA_BUSY:  gPhyCcaSec  += d; break;
-    case ns3::WifiPhyState::TX:        gPhyTxSec   += d; break;
-    case ns3::WifiPhyState::RX:        gPhyRxSec   += d; break;
-    default:                           gPhyOtherSec+= d; break;
   }
 }
 
@@ -762,18 +751,13 @@ int main(int argc, char *argv[])
   Config::Connect("/NodeList/*/DeviceList/*/$ns3::WifiNetDevice/Mac/MacRx",
                 MakeCallback(&CountRxPackets));
 
-  Config::ConnectWithoutContext(
-  "/NodeList/*/DeviceList/*/$ns3::WifiNetDevice/Phy/State/State",
-  MakeCallback(&PhyStateLogger));
-
   Config::Connect("/NodeList/*/DeviceList/*/$ns3::WifiNetDevice/Phy/PhyRxDrop",
                 MakeCallback(&DetailedPhyRxDropHandler));
 
   Config::Connect("/NodeList/*/DeviceList/*/$ns3::WifiNetDevice/Phy/PhyTxEnd",
                 MakeCallback(&PhyTxEndHandler));
 
-  Config::Connect("/NodeList/*/DeviceList/*/$ns3::WifiNetDevice/Phy/PhyRxEnd",
-                  MakeCallback(&PhyRxEndHandler));
+
 
   Config::Connect("/NodeList/*/DeviceList/*/$ns3::WifiNetDevice/Mac/MacTx",
                   MakeCallback(&MacTxOkHandler));
@@ -808,20 +792,6 @@ int main(int argc, char *argv[])
   std::cout << "Results: " << std::endl;
   std::cout << "- aggregate throughput: " << throughput << " Mbit/s" << std::endl;
 
-  {
-  const double total = gPhyIdleSec + gPhyCcaSec + gPhyTxSec + gPhyRxSec + gPhyOtherSec;
-  const double util  = (total > 0.0) ? ((gPhyTxSec + gPhyRxSec + gPhyCcaSec) / total) : 0.0;
-
-  std::cout << "\n=== PHY layer (time share) ===\n";
-  std::cout << "IDLE:      " << gPhyIdleSec << " s\n";
-  std::cout << "CCA_BUSY:  " << gPhyCcaSec  << " s\n";
-  std::cout << "TX:        " << gPhyTxSec   << " s\n";
-  std::cout << "RX:        " << gPhyRxSec   << " s\n";
-  std::cout << "OTHER:     " << gPhyOtherSec<< " s\n";
-  std::cout << "Channel Utilization: " << std::fixed << std::setprecision(2)
-            << (util * 100.0) << " %\n";
-}
-
 std::cout << "\n=== PHY layer (time share per node/device) ===\n";
 for (const auto& kv : gTxTimePerDev)
 {
@@ -829,9 +799,8 @@ for (const auto& kv : gTxTimePerDev)
     double tx  = gTxTimePerDev[key];
     double rx  = gRxTimePerDev[key];
     double cca = gCcaTimePerDev[key];
-    double totalSimTime = simulationTime + 1.0;
-    double idle = totalSimTime - (tx + rx + cca);
-    if (idle < 0) idle = 0.0;
+    double idle = gIdleTimePerDev[key];
+
 
     std::cout << "Node " << key.first << " | Dev " << key.second << "\n";
     std::cout << "IDLE:      " << std::fixed << std::setprecision(6) << idle << " s\n";
@@ -1067,26 +1036,6 @@ std::cout << "\nAggregate Packet Stats: Sent=" << totalSent
           << ", Lost=" << totalLost2
           << ", Loss Ratio=" << std::fixed << std::setprecision(2)
           << totalLossRatio2 << "%\n";
-
-
-std::cout << "\n--- Data transfer duration per receiver (MAC) ---" << std::endl;
-for (const auto& kv : gFirstRxTimePerDev)
-{
-    auto key = kv.first;
-    double duration = (gLastRxTimePerDev[key] - kv.second).GetSeconds();
-
-    if (duration <= 0.0)
-        continue;
-
-    std::cout << "Node " << key.first << " | Dev " << key.second
-              << " | Data transfer duration = "
-              << std::fixed;
-    if (duration < 0.01)
-        std::cout << std::setprecision(3) << duration * 1e6 << " µs";
-    else
-        std::cout << std::setprecision(6) << duration << " s";
-    std::cout << std::endl;
-}
 
 std::cout << "\n--- Delay and Jitter statistics ---\n";
 
