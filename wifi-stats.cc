@@ -71,38 +71,25 @@ using namespace ns3;
 
 NS_LOG_COMPONENT_DEFINE ("ex1");
 
-// --- PHY PSDU statistics ---
-static uint64_t gPsduSuccesses = 0;
-static uint64_t gPsduFailures = 0;
-static uint64_t gPhyHeaderFailures = 0;
-static uint64_t gRxWhileDecoding = 0;
-static uint64_t gRxAbortedByTx = 0;
-static uint64_t gTotalRxEvents = 0;
-static uint64_t gTotalPhyEvents = 0;
-static double gSimulationTime = 0.0;
-static uint32_t gPacketSize = 0;
+//  GLOBAL STATISTICS AND DATA STRUCTURES
 
+// Simulation configuration
+static double   gSimulationTime = 0.0;
+static uint32_t gPacketSize     = 0;
 
-static std::map<std::pair<uint32_t, uint32_t>, double> gTxTimePerDev;
-static std::map<std::pair<uint32_t, uint32_t>, double> gRxTimePerDev;
-static std::map<std::pair<uint32_t, uint32_t>, double> gCcaTimePerDev;
-static std::map<std::pair<uint32_t, uint32_t>, double> gTxOppDurationPerDev;
-static std::map<std::pair<uint32_t, uint32_t>, uint64_t> gMpduTxPerDev;
-static std::map<std::pair<uint32_t, uint32_t>, uint64_t> gMpduRetryPerDev;
-static std::map<std::pair<uint32_t, uint32_t>, uint64_t> gMpduFailPerDev;
-static std::map<std::pair<uint32_t,uint32_t>, uint32_t> gTxPacketsPerDev;
-static std::map<std::pair<uint32_t,uint32_t>, uint32_t> gRxPacketsPerDev;
-static std::map<std::pair<uint32_t,uint32_t>, uint64_t> gTxBytesPerDev;
-static std::map<std::pair<uint32_t,uint32_t>, uint64_t> gRxBytesPerDev;
-static std::map<std::pair<uint32_t,uint32_t>, Time> gFirstRxTimePerDev;
-static std::map<std::pair<uint32_t,uint32_t>, Time> gLastRxTimePerDev;
-static std::map<uint64_t, Time> gTxTimestampPerSeq;  // sequence → TX time
-static std::vector<double> gInterArrivalTimes;       // for jitter
-static std::vector<double> gDelays;                  // for delay
-static Time gLastRxTimeGlobal;                       // for inter-arrival
-static std::pair<uint32_t, uint32_t> ParseNodeDevFromContext(const std::string& ctx);
-static std::map<std::pair<uint32_t, uint32_t>, double> gRxThroughputPerDev;  // throughput per receiver (Mbit/s)
+//  PHY LAYER (PSDU-level) STATISTICS
+static uint64_t gPsduSuccesses      = 0;
+static uint64_t gPsduFailures       = 0;
+static uint64_t gPhyHeaderFailures  = 0;
+static uint64_t gRxWhileDecoding    = 0;
+static uint64_t gRxAbortedByTx      = 0;
+static uint64_t gTotalRxEvents      = 0;
+static uint64_t gTotalPhyEvents     = 0;
+
+// Per-device PSDU success counters
 std::map<std::pair<uint32_t, uint32_t>, uint32_t> gPsduSuccessPerDev;
+
+// Per-address PHY reception breakdown
 static std::map<Mac48Address, uint64_t> gPhyHeaderFailed;
 static std::map<Mac48Address, uint64_t> gRxEventWhileDecoding;
 static std::map<Mac48Address, uint64_t> gRxEventAbortedByTx;
@@ -110,33 +97,72 @@ static std::map<Mac48Address, uint64_t> gPsduSucceeded;
 static std::map<Mac48Address, uint64_t> gPsduFailed;
 static std::map<Mac48Address, uint64_t> gBlockAckRx;
 static std::map<Mac48Address, uint64_t> gBlockAckReqRx;
-static uint64_t gRxTagged = 0, gRxUntagged = 0;
+static uint64_t gRxTagged   = 0;
+static uint64_t gRxUntagged = 0;
+
+//  PHY STATE TIME STATISTICS (per node/device)
+static std::map<std::pair<uint32_t, uint32_t>, double> gTxTimePerDev;
+static std::map<std::pair<uint32_t, uint32_t>, double> gRxTimePerDev;
+static std::map<std::pair<uint32_t, uint32_t>, double> gCcaTimePerDev;
+static std::map<std::pair<uint32_t, uint32_t>, double> gIdleTimePerDev;
+static std::map<std::pair<uint32_t, uint32_t>, double> gTxOppDurationPerDev;
+
+//  MAC LAYER STATISTICS
+static std::map<std::pair<uint32_t, uint32_t>, uint64_t> gMpduTxPerDev;
+static std::map<std::pair<uint32_t, uint32_t>, uint64_t> gMpduRetryPerDev;
+static std::map<std::pair<uint32_t, uint32_t>, uint64_t> gMpduFailPerDev;
+
+// Aggregate MAC transmission metrics
 std::map<std::pair<uint32_t, uint32_t>, uint32_t> gTxAttemptsPerDev;
 std::map<std::pair<uint32_t, uint32_t>, uint32_t> gRetriesPerDev;
 std::map<std::pair<uint32_t, uint32_t>, uint32_t> gFailuresPerDev;
-static uint64_t gDroppedDataFrames = 0;
-static uint64_t gDroppedAckFrames = 0;
-static uint64_t gDroppedRtsFrames = 0;
-static uint64_t gDroppedCtsFrames = 0;
-static uint64_t gDroppedBlockAckFrames = 0;
-// --- Counters for all received frame types (successful reception) ---
-static uint64_t gTotalDataFrames = 0;
-static uint64_t gTotalAckFrames = 0;
-static uint64_t gTotalRtsFrames = 0;
-static uint64_t gTotalCtsFrames = 0;
-static uint64_t gTotalBlockAckFrames = 0;
-// --- Counters for transmitted frame types (successful PHY TX) ---
-static uint64_t gTotalTxDataFrames = 0;
-static uint64_t gTotalTxAckFrames = 0;
-static uint64_t gTotalTxRtsFrames = 0;
-static uint64_t gTotalTxCtsFrames = 0;
-static uint64_t gTotalTxBlockAckFrames = 0;
-static std::map<std::pair<uint32_t, uint32_t>, double> gIdleTimePerDev;
 
+//  APPLICATION / NETWORK LAYER STATISTICS
+static std::map<std::pair<uint32_t, uint32_t>, uint32_t> gTxPacketsPerDev;
+static std::map<std::pair<uint32_t, uint32_t>, uint32_t> gRxPacketsPerDev;
+static std::map<std::pair<uint32_t, uint32_t>, uint64_t> gTxBytesPerDev;
+static std::map<std::pair<uint32_t, uint32_t>, uint64_t> gRxBytesPerDev;
 
+// RX timing (per node/device)
+static std::map<std::pair<uint32_t, uint32_t>, Time> gFirstRxTimePerDev;
+static std::map<std::pair<uint32_t, uint32_t>, Time> gLastRxTimePerDev;
+static Time gLastRxTimeGlobal;
 
+// TX timestamps for delay calculation
+static std::map<uint64_t, Time> gTxTimestampPerSeq;
 
+// Delay and jitter
+static std::vector<double> gDelays;
+static std::vector<double> gInterArrivalTimes;
 
+// Throughput per receiver (Mbit/s)
+static std::map<std::pair<uint32_t, uint32_t>, double> gRxThroughputPerDev;
+
+//  FRAME TYPE CLASSIFICATION COUNTERS
+
+// Dropped frame types (PHY RX drop classification)
+static uint64_t gDroppedDataFrames      = 0;
+static uint64_t gDroppedAckFrames       = 0;
+static uint64_t gDroppedRtsFrames       = 0;
+static uint64_t gDroppedCtsFrames       = 0;
+static uint64_t gDroppedBlockAckFrames  = 0;
+
+// Successfully received frame types (PHY RX end classification)
+static uint64_t gTotalDataFrames        = 0;
+static uint64_t gTotalAckFrames         = 0;
+static uint64_t gTotalRtsFrames         = 0;
+static uint64_t gTotalCtsFrames         = 0;
+static uint64_t gTotalBlockAckFrames    = 0;
+
+// Successfully transmitted frame types (PHY TX classification)
+static uint64_t gTotalTxDataFrames      = 0;
+static uint64_t gTotalTxAckFrames       = 0;
+static uint64_t gTotalTxRtsFrames       = 0;
+static uint64_t gTotalTxCtsFrames       = 0;
+static uint64_t gTotalTxBlockAckFrames  = 0;
+
+//  HELPER DECLARATIONS
+static std::pair<uint32_t, uint32_t> ParseNodeDevFromContext(const std::string& ctx);
 
 template <typename T>
 void IncrementCounter(std::map<Mac48Address, T>& counter, Mac48Address address)
@@ -151,7 +177,7 @@ void IncrementCounter(std::map<Mac48Address, T>& counter, Mac48Address address)
   }
 }
 
-// --- PSDU callbacks (success & failure) ---
+// PSDU callbacks (success & failure)
 
 static void
 PhyRxEndHandler(std::string context, Ptr<const Packet> packet)
@@ -235,7 +261,7 @@ PhyRxEndHandler(std::string context, Ptr<const Packet> packet)
 }
 
 
-// === PHY TX End Handler ===
+// PHY TX End Handler
 static void
 PhyTxEndHandler(std::string context, Ptr<const Packet> packet)
 {
@@ -311,7 +337,7 @@ static void DetailedPhyRxDropHandler(std::string context,
         gDroppedBlockAckFrames++;
       }
 
-      // --- existing reason-based counting ---
+      // existing reason-based counting
       switch (reason)
       {
         case ns3::WifiPhyRxfailureReason::L_SIG_FAILURE:
@@ -352,7 +378,7 @@ static void CountRxPackets(std::string context, Ptr<const Packet> packet)
     }
     gLastRxTimePerDev[key] = now;
 
-        // --- Compute one-way delay if TX timestamp known ---
+        // Compute one-way delay if TX timestamp known
     auto txIt = gTxTimestampPerSeq.find(packet->GetUid());
     if (txIt != gTxTimestampPerSeq.end())
     {
@@ -360,7 +386,7 @@ static void CountRxPackets(std::string context, Ptr<const Packet> packet)
         gDelays.push_back(delay);
     }
 
-    // --- Compute inter-arrival time for jitter ---
+    // Compute inter-arrival time for jitter
     if (gLastRxTimeGlobal.IsZero())
     {
         gLastRxTimeGlobal = Simulator::Now();
@@ -398,37 +424,37 @@ void MyRxMonitorSnifferCallback(std::string context,
 }
 
 
-static void
-PhyRxDropHandler(std::string /*context*/, Ptr<const Packet> /*packet*/, WifiPhyRxfailureReason reason)
-{
-  switch (reason)
-  {
-    // --- Header-level failures ---
-    case WifiPhyRxfailureReason::L_SIG_FAILURE:
-    case WifiPhyRxfailureReason::HT_SIG_FAILURE:
-    case WifiPhyRxfailureReason::SIG_A_FAILURE:
-    case WifiPhyRxfailureReason::SIG_B_FAILURE:
-      gPhyHeaderFailures++;
-      break;
+// static void
+// PhyRxDropHandler(std::string /*context*/, Ptr<const Packet> /*packet*/, WifiPhyRxfailureReason reason)
+// {
+//   switch (reason)
+//   {
+//     // --- Header-level failures ---
+//     case WifiPhyRxfailureReason::L_SIG_FAILURE:
+//     case WifiPhyRxfailureReason::HT_SIG_FAILURE:
+//     case WifiPhyRxfailureReason::SIG_A_FAILURE:
+//     case WifiPhyRxfailureReason::SIG_B_FAILURE:
+//       gPhyHeaderFailures++;
+//       break;
 
-    // --- RX events while decoding preamble ---
-    case WifiPhyRxfailureReason::BUSY_DECODING_PREAMBLE:
-    case WifiPhyRxfailureReason::PREAMBLE_DETECT_FAILURE:
-      gRxWhileDecoding++;
-      break;
+//     // --- RX events while decoding preamble ---
+//     case WifiPhyRxfailureReason::BUSY_DECODING_PREAMBLE:
+//     case WifiPhyRxfailureReason::PREAMBLE_DETECT_FAILURE:
+//       gRxWhileDecoding++;
+//       break;
 
-    // --- Reception aborted by the start of a TX transmission ---
-    case WifiPhyRxfailureReason::RECEPTION_ABORTED_BY_TX:
-      gRxAbortedByTx++;
-      break;
+//     // --- Reception aborted by the start of a TX transmission ---
+//     case WifiPhyRxfailureReason::RECEPTION_ABORTED_BY_TX:
+//       gRxAbortedByTx++;
+//       break;
 
-    // Actual PSDU-level failures
-    default:
-      gPsduFailures++;
-      break;
-  }
-    gTotalRxEvents++;
-}
+//     // Actual PSDU-level failures
+//     default:
+//       gPsduFailures++;
+//       break;
+//   }
+//     gTotalRxEvents++;
+// }
 
 static void
 MacTxSuccessPerDev(std::string context, Ptr<const Packet> p)
@@ -684,7 +710,7 @@ int main(int argc, char *argv[])
     ApplicationContainer sourceApplications, sinkApplications;
     const uint16_t portNumber = 9;
 
-    // --- Sink on AP ---
+    // Sink on AP
     auto apIpv4 = wifiApNode.Get(0)->GetObject<Ipv4>();
     Ipv4Address apAddr = apIpv4->GetAddress(1, 0).GetLocal();
     InetSocketAddress sinkSocket(apAddr, portNumber);
@@ -692,7 +718,7 @@ int main(int argc, char *argv[])
     PacketSinkHelper packetSinkHelper("ns3::UdpSocketFactory", sinkSocket);
     sinkApplications.Add(packetSinkHelper.Install(wifiApNode.Get(0)));
 
-    // --- Client only on the first station: 1 packet ---
+    // Client only on the first station: 1 packet
     UdpClientHelper client(sinkSocket);
     client.SetAttribute("MaxPackets", UintegerValue(maxPackets));
     client.SetAttribute("Interval", TimeValue(Seconds(interval)));
@@ -724,27 +750,17 @@ int main(int argc, char *argv[])
   Config::Connect("/NodeList/*/DeviceList/*/$ns3::WifiNetDevice/Phy/MonitorSnifferRx",
                 MakeCallback(&MyRxMonitorSnifferCallback));
 
-
-  // --- PHY PSDU success/failure tracking ---
   Config::Connect("/NodeList/*/DeviceList/*/$ns3::WifiNetDevice/Phy/PhyRxEnd",
                   MakeCallback(&PhyRxEndHandler));
 
-  Config::Connect("/NodeList/*/DeviceList/*/$ns3::WifiNetDevice/Phy/PhyRxDrop",
-                  MakeCallback(&PhyRxDropHandler));
+  Config::Connect("/NodeList/*/DeviceList/*/$ns3::WifiNetDevice/Phy/State/State",
+                MakeCallback(&PerDevicePhyStateTracker));
 
-  // --- Per-device PHY state tracking ---
-  Config::Connect(
-    "/NodeList/*/DeviceList/*/$ns3::WifiNetDevice/Phy/State/State",
-    MakeCallback(&PerDevicePhyStateTracker)
-  );
+  Config::Connect("/NodeList/*/DeviceList/*/$ns3::WifiNetDevice/Mac/MacTx",
+                MakeCallback(&MacTxSuccessPerDev));
 
-  Config::Connect(
-  "/NodeList/*/DeviceList/*/$ns3::WifiNetDevice/Mac/MacTx",
-  MakeCallback(&MacTxSuccessPerDev));
-
-  Config::Connect(
-  "/NodeList/*/DeviceList/*/$ns3::WifiNetDevice/Mac/MacTxDrop",
-  MakeCallback(&MacTxFailPerDev));
+  Config::Connect("/NodeList/*/DeviceList/*/$ns3::WifiNetDevice/Mac/MacTxDrop",
+                MakeCallback(&MacTxFailPerDev));
 
   Config::Connect("/NodeList/*/DeviceList/*/$ns3::WifiNetDevice/Mac/MacTx",
                 MakeCallback(&CountTxPackets));
@@ -759,16 +775,17 @@ int main(int argc, char *argv[])
 
 
 
-  Config::Connect("/NodeList/*/DeviceList/*/$ns3::WifiNetDevice/Mac/MacTx",
-                  MakeCallback(&MacTxOkHandler));
-  Config::Connect("/NodeList/*/DeviceList/*/$ns3::WifiNetDevice/Mac/MacTxDrop",
-                  MakeCallback(&MacTxFailedHandler));
+  // Config::Connect("/NodeList/*/DeviceList/*/$ns3::WifiNetDevice/Mac/MacTx",
+  //                 MakeCallback(&MacTxOkHandler));
 
-  Config::Connect("/NodeList/*/DeviceList/*/$ns3::WifiNetDevice/Mac/MacTxDrop",
-                  MakeCallback(&MacRetryHandler));
+  // Config::Connect("/NodeList/*/DeviceList/*/$ns3::WifiNetDevice/Mac/MacTxDrop",
+  //                 MakeCallback(&MacTxFailedHandler));
 
+  // Config::Connect("/NodeList/*/DeviceList/*/$ns3::WifiNetDevice/Mac/MacTxDrop",
+  //                 MakeCallback(&MacRetryHandler));
 
-
+    // Config::Connect("/NodeList/*/DeviceList/*/$ns3::WifiNetDevice/Phy/PhyRxDrop",
+  //                 MakeCallback(&PhyRxDropHandler));
 
 
   // Run the simulation!
@@ -780,19 +797,28 @@ int main(int argc, char *argv[])
   std::chrono::duration<double> elapsed = finish - start;
   std::cout << "Elapsed time: " << elapsed.count() << " s\n\n";
 
-  // Calculate throughput
-  double throughput = 0;
-  for (uint32_t index = 0; index < sinkApplications.GetN(); ++index) // Loop over all traffic sinks
-  {
-    uint64_t totalBytesThrough = DynamicCast<PacketSink>(sinkApplications.Get(index))->GetTotalRx(); // Get amount of bytes received
-    throughput += ((totalBytesThrough * 8) / (simulationTime * 1000000.0));                          // Mbit/s
-  }
 
-  // Print results
-  std::cout << "Results: " << std::endl;
-  std::cout << "- aggregate throughput: " << throughput << " Mbit/s" << std::endl;
+////////////////////////////////////////
+// ============================================================================
+// === RESULTS SUMMARY ===
+double throughput = 0;
+for (uint32_t index = 0; index < sinkApplications.GetN(); ++index)
+{
+    uint64_t totalBytesThrough = DynamicCast<PacketSink>(sinkApplications.Get(index))->GetTotalRx();
+    throughput += ((totalBytesThrough * 8) / (simulationTime * 1000000.0)); // Mbit/s
+}
 
-std::cout << "\n=== PHY layer (time share per node/device) ===\n";
+std::cout << "Results:\n";
+std::cout << "- aggregate throughput: " << throughput << " Mbit/s\n";
+
+// ============================================================================
+// === PHY LAYER STATISTICS ===
+// ============================================================================
+
+std::cout << "\n=== PHY LAYER STATISTICS ===\n";
+
+// --- Per-node/device time share ---
+std::cout << "\n--- Time Share per Node/Device ---\n";
 for (const auto& kv : gTxTimePerDev)
 {
     auto key = kv.first;
@@ -810,37 +836,8 @@ for (const auto& kv : gTxTimePerDev)
     std::cout << "OTHER:     0 s\n\n";
 }
 
-
-// --- MAC layer (MPDU) statistics ---
-std::cout << std::endl << "=== MAC layer (MPDU) statistics ===" << std::endl;
-
-uint64_t mpduSuccesses = txStats.GetSuccesses();
-uint64_t mpduFailures = txStats.GetFailures();
-uint64_t mpduRetries = txStats.GetRetransmissions();
-
-std::cout << "MPDU Successes:     " << mpduSuccesses << std::endl;
-std::cout << "MPDU Failures:      " << mpduFailures << std::endl;
-std::cout << "MPDU Retransmits:   " << mpduRetries << std::endl;
-
-std::cout << "\n--- PHY PSDU statistics ---\n";
-std::cout << "PHY header failures: " << gPhyHeaderFailures << "\n";
-std::cout << "RX while decoding preamble: " << gRxWhileDecoding << "\n";
-std::cout << "RX aborted by TX:           " << gRxAbortedByTx << "\n";
-std::cout << "PSDU successes:       " << gPsduSuccesses << "\n";
-std::cout << "PSDU failures:        " << gPsduFailures << "\n";
-std::cout << "Total RX events:       " << gTotalRxEvents << "\n";
-std::cout << "Total PHY events:      " << gTotalPhyEvents << "\n";
-
-std::cout << "\n*** PSDU Success (per receiver) ***\n";
-for (const auto& kv : gPsduSuccessPerDev)
-{
-    std::cout << "Node " << kv.first.first
-              << " | Dev " << kv.first.second
-              << " | PSDU Success = " << kv.second << std::endl;
-}
-
-
-std::cout << "\n--- Channel Utilization per node/device ---\n";
+// --- Channel Utilization ---
+std::cout << "--- Channel Utilization per Node/Device ---\n";
 for (const auto& kv : gTxTimePerDev)
 {
     auto key = kv.first;
@@ -866,8 +863,8 @@ for (const auto& kv : gTxTimePerDev)
               << utilPct << " %\n";
 }
 
-
-std::cout << "\n--- Tx Opportunity Duration per node/device ---\n";
+// --- Tx Opportunity Duration ---
+std::cout << "\n--- Tx Opportunity Duration ---\n";
 for (const auto& kv : gTxOppDurationPerDev)
 {
   auto key = kv.first;
@@ -878,7 +875,79 @@ for (const auto& kv : gTxOppDurationPerDev)
             << std::fixed << std::setprecision(6) << txOpp << " s\n";
 }
 
-std::cout << "\n--- MAC per node/device MPDU statistics ---\n";
+// --- PSDU-Level PHY Counters ---
+std::cout << "\n--- PHY PSDU Counters ---\n"
+          << "PHY header failures: " << gPhyHeaderFailures << "\n"
+          << "RX while decoding preamble: " << gRxWhileDecoding << "\n"
+          << "RX aborted by TX: " << gRxAbortedByTx << "\n"
+          << "PSDU successes: " << gPsduSuccesses << "\n"
+          << "PSDU failures:  " << gPsduFailures << "\n"
+          << "Total RX events: " << gTotalRxEvents << "\n"
+          << "Total PHY events: " << gTotalPhyEvents << "\n";
+
+// --- PSDU Success per Receiver ---
+std::cout << "\n--- PSDU Success per Receiver ---\n";
+for (const auto& kv : gPsduSuccessPerDev)
+{
+    std::cout << "Node " << kv.first.first
+              << " | Dev " << kv.first.second
+              << " | PSDU Success = " << kv.second << std::endl;
+}
+
+// --- Total RX events per receiver (PSDU-based) ---
+std::cout << "\n--- Total RX events per receiver (PSDU-based) ---\n";
+
+uint32_t totalPsduSuccess = 0;
+for (const auto& entry : gPsduSuccessPerDev)
+{
+    totalPsduSuccess += entry.second;
+}
+
+std::cout << "Total RX events per receiver (PSDU-based): "
+          << totalPsduSuccess << std::endl;
+
+// --- PHY Frame Classification ---
+std::cout << "\n--- PHY Frame Classification ---\n";
+
+std::cout << "\n--- Dropped frame types (PHY RX drop classification) ---" << std::endl;
+std::cout << "Dropped DATA frames:      " << gDroppedDataFrames << std::endl;
+std::cout << "Dropped ACK frames:       " << gDroppedAckFrames << std::endl;
+std::cout << "Dropped RTS frames:       " << gDroppedRtsFrames << std::endl;
+std::cout << "Dropped CTS frames:       " << gDroppedCtsFrames << std::endl;
+std::cout << "Dropped BlockAck frames:  " << gDroppedBlockAckFrames << std::endl;
+
+std::cout << "\n--- Received frame types (PHY RX end classification) ---" << std::endl;
+std::cout << "Received DATA frames:      " << gTotalDataFrames << std::endl;
+std::cout << "Received ACK frames:       " << gTotalAckFrames << std::endl;
+std::cout << "Received RTS frames:       " << gTotalRtsFrames << std::endl;
+std::cout << "Received CTS frames:       " << gTotalCtsFrames << std::endl;
+std::cout << "Received BlockAck frames:  " << gTotalBlockAckFrames << std::endl;
+
+std::cout << "\n--- Transmitted frame types (PHY TX classification) ---" << std::endl;
+std::cout << "Transmitted DATA frames:      " << gTotalTxDataFrames << std::endl;
+std::cout << "Transmitted ACK frames:       " << gTotalTxAckFrames << std::endl;
+std::cout << "Transmitted RTS frames:       " << gTotalTxRtsFrames << std::endl;
+std::cout << "Transmitted CTS frames:       " << gTotalTxCtsFrames << std::endl;
+std::cout << "Transmitted BlockAck frames:  " << gTotalTxBlockAckFrames << std::endl;
+
+
+// ============================================================================
+// === MAC LAYER STATISTICS ===
+// ============================================================================
+std::cout << "\n=== MAC LAYER STATISTICS ===\n";
+
+// --- Global MPDU counters ---
+uint64_t mpduSuccesses = txStats.GetSuccesses();
+uint64_t mpduFailures = txStats.GetFailures();
+uint64_t mpduRetries = txStats.GetRetransmissions();
+
+std::cout << "MPDU Successes:   " << mpduSuccesses << "\n"
+          << "MPDU Failures:    " << mpduFailures  << "\n"
+          << "MPDU Retransmits: " << mpduRetries   << "\n";
+
+
+// --- Per-node/device MPDU breakdown ---
+std::cout << "\n--- MPDU per Node/Device ---\n";
 for (const auto &kv : gMpduTxPerDev)
 {
   auto key = kv.first;
@@ -894,6 +963,7 @@ for (const auto &kv : gMpduTxPerDev)
             << std::endl;
 }
 
+// --- Aggregate MAC transmission statistics ---
 std::cout << "\n--- MAC aggregate transmission statistics ---\n";
 uint32_t totalTxAttempts = 0;
 uint32_t totalRetries = 0;
@@ -918,12 +988,14 @@ for (uint32_t i = 0; i < NodeList::GetNNodes(); ++i)
     }
 }
 
-std::cout << "Tx Attempts (aggregate): " << totalTxAttempts << std::endl;
-std::cout << "Tx Retries (aggregate):  " << totalRetries << std::endl;
-std::cout << "Tx Failures (aggregate): " << totalFailures << std::endl;
+std::cout << "\n--- MAC Aggregate Transmission Statistics ---\n"
+          << "Tx Attempts (aggregate): " << totalTxAttempts << "\n"
+          << "Tx Retries (aggregate):  " << totalRetries    << "\n"
+          << "Tx Failures (aggregate): " << totalFailures   << "\n";
 
 
-std::cout << "\n--- MAC derived performance metrics per node/device ---\n";
+// --- Derived performance metrics per node/device ---
+std::cout << "\n--- MAC Derived Performance Metrics ---\n";
 for (const auto &kv : gMpduTxPerDev)
 {
   auto key = kv.first;
@@ -948,7 +1020,8 @@ for (const auto &kv : gMpduTxPerDev)
             << std::endl;
 }
 
-std::cout << "\n--- MAC Throughput per node/device ---\n";
+// --- MAC Throughput per node/device ---
+std::cout << "\n--- MAC Throughput per Node/Device ---\n";
 for (const auto &kv : gMpduTxPerDev)
 {
   auto key = kv.first;
@@ -967,7 +1040,13 @@ for (const auto &kv : gMpduTxPerDev)
             << throughputMbps << " Mbit/s\n";
 }
 
-std::cout << "\n--- Network/Application layer statistics ---\n";
+// ============================================================================
+// === NETWORK & APPLICATION LAYER ===
+// ============================================================================
+std::cout << "\n=== NETWORK & APPLICATION LAYER STATISTICS ===\n";
+
+// --- TX/RX Packets and Bytes ---
+std::cout << "\n--- Packets and Bytes per Node/Device ---\n";
 for (auto &entry : gTxPacketsPerDev)
 {
     uint32_t node = entry.first.first;
@@ -980,10 +1059,8 @@ for (auto &entry : gTxPacketsPerDev)
               << std::endl;
 }
 
-std::cout << "\n--- Packet loss and timing statistics ---\n";
-
-// Per-sender
-std::cout << "[Per sender]\n";
+// --- Per-Sender Summary ---
+std::cout << "\n--- Per Sender ---\n";
 for (const auto& entry : gTxPacketsPerDev) {
     const auto& key = entry.first;
     uint64_t sent = entry.second;
@@ -991,8 +1068,8 @@ for (const auto& entry : gTxPacketsPerDev) {
               << " | Sent=" << sent << "\n";
 }
 
-// Per-receiver
-std::cout << "[Per receiver]\n";
+// --- Per-Receiver Summary ---
+std::cout << "\n--- Per Receiver ---\n";
 for (const auto& entry : gRxPacketsPerDev) {
     const auto& key = entry.first;
     uint64_t received = entry.second;
@@ -1009,7 +1086,7 @@ for (const auto& entry : gRxPacketsPerDev) {
     }
 }
 
-// Global totals
+// --- Aggregate Packet Statistics ---
 uint64_t totalSent = 0, totalReceived = 0;
 for (const auto& e : gTxPacketsPerDev) totalSent += e.second;
 for (const auto& e : gRxPacketsPerDev) totalReceived += e.second;
@@ -1019,65 +1096,45 @@ double totalLossRatio = (totalSent > 0)
     ? (static_cast<double>(totalLost) / totalSent) * 100.0
     : 0.0;
 
-std::cout << "\nAggregate Packet Stats: Sent=" << totalSent
+std::cout << "\n--- Aggregate Packet Statistics ---\n"
+          << "Sent=" << totalSent
           << ", Received=" << totalReceived
           << ", Lost=" << totalLost
           << ", Loss Ratio=" << std::fixed << std::setprecision(2)
           << totalLossRatio << "%\n";
-
 
 uint64_t totalLost2 = (totalSent > totalReceived) ? (totalSent - totalReceived) : 0;
 double totalLossRatio2 = (totalSent > 0)
     ? (static_cast<double>(totalLost2) / totalSent) * 100.0
     : 0.0;
 
-std::cout << "\nAggregate Packet Stats: Sent=" << totalSent
+std::cout << "\n--- Aggregate Packet Statistics ---\n"
+          << "Sent=" << totalSent
           << ", Received=" << totalReceived
           << ", Lost=" << totalLost2
           << ", Loss Ratio=" << std::fixed << std::setprecision(2)
           << totalLossRatio2 << "%\n";
 
-std::cout << "\n--- Delay and Jitter statistics ---\n";
 
-// Average delay
-if (!gDelays.empty())
+// --- RX Timing per Node/Device ---
+std::cout << "\n--- RX Timing per Node/Device ---\n";
+for (const auto& kv : gFirstRxTimePerDev)
 {
-    double sumDelay = std::accumulate(gDelays.begin(), gDelays.end(), 0.0);
-    double avgDelay = sumDelay / gDelays.size();
+    uint32_t nodeId = kv.first.first;
+    uint32_t devId = kv.first.second;
+    double first = kv.second.GetSeconds();
+    double last = gLastRxTimePerDev.count(kv.first) ? gLastRxTimePerDev.at(kv.first).GetSeconds() : first;
+    double duration = std::max(0.0, last - first);
 
-    std::cout << "Average delay: "
-              << std::fixed << std::setprecision(3)
-              << (avgDelay < 0.01 ? avgDelay * 1e6 : avgDelay)
-              << (avgDelay < 0.01 ? " µs" : " s") << std::endl;
-}
-else
-{
-    std::cout << "Average delay: N/A (no received packets)\n";
-}
-
-
-// Jitter (standard deviation of inter-arrival times)
-if (gInterArrivalTimes.size() > 1)
-{
-    double meanIAT = std::accumulate(gInterArrivalTimes.begin(), gInterArrivalTimes.end(), 0.0) / gInterArrivalTimes.size();
-    double sqSum = 0.0;
-    for (double val : gInterArrivalTimes)
-        sqSum += std::pow(val - meanIAT, 2);
-    double jitter = std::sqrt(sqSum / (gInterArrivalTimes.size() - 1));
-
-    std::cout << "Jitter (IAT std dev): "
-              << std::fixed << std::setprecision(3)
-              << (jitter < 0.01 ? jitter * 1e6 : jitter)
-              << (jitter < 0.01 ? " µs" : " s") << std::endl;
-}
-else
-{
-    std::cout << "Jitter (IAT std dev): N/A (too few packets)\n";
+    std::cout << "Node " << nodeId << " | Dev " << devId
+              << " | First RX=" << std::fixed << std::setprecision(6) << first << " s"
+              << " | Last RX=" << last << " s"
+              << " | Duration=" << duration << " s"
+              << std::endl;
 }
 
-
-std::cout << "\n--- Receiver-side throughput statistics ---\n";
-
+// --- Receiver-side Throughput ---
+std::cout << "\n--- Receiver-side Throughput ---\n";
 double aggregateRxThroughput = 0.0;
 for (auto& kv : gRxBytesPerDev)
 {
@@ -1099,88 +1156,112 @@ std::cout << "Aggregate RX Throughput = "
           << std::fixed << std::setprecision(6)
           << aggregateRxThroughput << " Mbit/s" << std::endl;
 
+// --- Delay and Jitter Statistics ---
+std::cout << "\n--- Delay and Jitter ---\n";
 
-std::cout << "\n--- RX timing per node/device ---" << std::endl;
-for (const auto& kv : gFirstRxTimePerDev)
+// Average delay
+if (!gDelays.empty())
 {
-    uint32_t nodeId = kv.first.first;
-    uint32_t devId = kv.first.second;
-    double first = kv.second.GetSeconds();
-    double last = gLastRxTimePerDev.count(kv.first) ? gLastRxTimePerDev.at(kv.first).GetSeconds() : first;
-    double duration = std::max(0.0, last - first);
+    double sumDelay = std::accumulate(gDelays.begin(), gDelays.end(), 0.0);
+    double avgDelay = sumDelay / gDelays.size();
 
-    std::cout << "Node " << nodeId << " | Dev " << devId
-              << " | First RX=" << std::fixed << std::setprecision(6) << first << " s"
-              << " | Last RX=" << last << " s"
-              << " | Duration=" << duration << " s"
-              << std::endl;
+    std::cout << "Average delay: "
+              << std::fixed << std::setprecision(3)
+              << (avgDelay < 0.01 ? avgDelay * 1e6 : avgDelay)
+              << (avgDelay < 0.01 ? " µs" : " s") << std::endl;
+}
+else
+{
+    std::cout << "Average delay: N/A (no received packets)\n";
 }
 
-// --- Block ACK metrics ---
-std::cout << "\n--- Block ACK metrics ---" << std::endl;
-std::cout << "- BA total:  0" << std::endl;
-std::cout << "- BAR total: 0" << std::endl;
-
-std::cout << "\n--- Detailed Block ACK events (per MAC) ---\n";
-
-for (const auto& kv : gBlockAckRx)
-    std::cout << "Node " << kv.first << " BlockAck RX = " << kv.second << std::endl;
-
-for (const auto& kv : gBlockAckReqRx)
-    std::cout << "Node " << kv.first << " BlockAckReq RX = " << kv.second << std::endl;
-
-for (const auto& kv : gPhyHeaderFailed)
-    std::cout << "MAC " << kv.first << " PHY Header Failures = " << kv.second << std::endl;
-
-for (const auto& kv : gRxEventWhileDecoding)
-    std::cout << "MAC " << kv.first << " RX While Decoding = " << kv.second << std::endl;
-
-for (const auto& kv : gRxEventAbortedByTx)
-    std::cout << "MAC " << kv.first << " RX Aborted By TX = " << kv.second << std::endl;
-
-// --- Total RX events per receiver (PSDU-based) ---
-uint32_t totalPsduSuccess = 0;
-for (const auto& entry : gPsduSuccessPerDev)
+// Jitter (standard deviation of inter-arrival times)
+if (gInterArrivalTimes.size() > 1)
 {
-    totalPsduSuccess += entry.second;
-}
-std::cout << "Total RX events per receiver (PSDU-based): "
-          << totalPsduSuccess << std::endl;
+    double meanIAT = std::accumulate(gInterArrivalTimes.begin(), gInterArrivalTimes.end(), 0.0) / gInterArrivalTimes.size();
+    double sqSum = 0.0;
+    for (double val : gInterArrivalTimes)
+        sqSum += std::pow(val - meanIAT, 2);
+    double jitter = std::sqrt(sqSum / (gInterArrivalTimes.size() - 1));
 
-// --- Aggregate Data Transfer Duration (all) ---
+    std::cout << "Jitter (IAT std dev): "
+              << std::fixed << std::setprecision(3)
+              << (jitter < 0.01 ? jitter * 1e6 : jitter)
+              << (jitter < 0.01 ? " µs" : " s") << std::endl;
+}
+else
+{
+    std::cout << "Jitter (IAT std dev): N/A (too few packets)\n";
+}
+
+// ============================================================================
+// === BLOCK ACK & ADVANCED PHY/MAC METRICS ===
+// ============================================================================
+std::cout << "\n=== BLOCK ACK & ADVANCED PHY/MAC METRICS ===\n";
+
+// --- Block ACK Summary ---
+uint64_t totalBlockAckRx = 0;
+uint64_t totalBlockAckReqRx = 0;
+for (const auto& [_, count] : gBlockAckRx)     totalBlockAckRx     += count;
+for (const auto& [_, count] : gBlockAckReqRx)  totalBlockAckReqRx  += count;
+
+std::cout << "\n--- Block ACK Summary ---\n";
+std::cout << "Total BlockAck RX:    " << totalBlockAckRx << "\n";
+std::cout << "Total BlockAckReq RX: " << totalBlockAckReqRx << "\n";
+
+// --- Detailed Block ACK Events (per MAC address) ---
+std::cout << "\n--- Detailed Block ACK Events (per MAC) ---\n";
+if (gBlockAckRx.empty() && gBlockAckReqRx.empty())
+{
+    std::cout << "(no Block ACK events recorded)\n";
+}
+else
+{
+    for (const auto& [mac, count] : gBlockAckRx)
+        std::cout << "MAC " << mac << " | BlockAck RX = " << count << "\n";
+    for (const auto& [mac, count] : gBlockAckReqRx)
+        std::cout << "MAC " << mac << " | BlockAckReq RX = " << count << "\n";
+}
+
+// --- PHY Error / Abort Events ---
+std::cout << "\n--- PHY Error & Abort Events (per MAC) ---\n";
+if (gPhyHeaderFailed.empty() && gRxEventWhileDecoding.empty() && gRxEventAbortedByTx.empty())
+{
+    std::cout << "(no PHY error/abort events recorded)\n";
+}
+else
+{
+    for (const auto& [mac, count] : gPhyHeaderFailed)
+        std::cout << "MAC " << mac << " | PHY Header Failures = " << count << "\n";
+    for (const auto& [mac, count] : gRxEventWhileDecoding)
+        std::cout << "MAC " << mac << " | RX While Decoding = " << count << "\n";
+    for (const auto& [mac, count] : gRxEventAbortedByTx)
+        std::cout << "MAC " << mac << " | RX Aborted By TX = " << count << "\n";
+}
+
+// --- Aggregate Data Transfer Duration ---
 double totalDataTransferDuration = 0.0;
-for (const auto& kv : gFirstRxTimePerDev)
+for (const auto& [key, firstTime] : gFirstRxTimePerDev)
 {
-    double duration = (gLastRxTimePerDev[kv.first] - kv.second).GetSeconds();
-    if (duration > 0.0)
+    if (gLastRxTimePerDev.count(key))
     {
-        totalDataTransferDuration += duration;
+        double duration = (gLastRxTimePerDev.at(key) - firstTime).GetSeconds();
+        if (duration > 0.0)
+            totalDataTransferDuration += duration;
     }
 }
-std::cout << "Aggregate Data Transfer Duration (all): "
+
+std::cout << "\n--- Aggregate Data Transfer Duration ---\n";
+std::cout << "Total duration (sum over all receivers): "
           << std::fixed << std::setprecision(6)
-          << totalDataTransferDuration << " s" << std::endl;
+          << totalDataTransferDuration << " s\n";
 
-std::cout << "\n--- Dropped frame types (PHY RX drop classification) ---" << std::endl;
-std::cout << "Dropped DATA frames:      " << gDroppedDataFrames << std::endl;
-std::cout << "Dropped ACK frames:       " << gDroppedAckFrames << std::endl;
-std::cout << "Dropped RTS frames:       " << gDroppedRtsFrames << std::endl;
-std::cout << "Dropped CTS frames:       " << gDroppedCtsFrames << std::endl;
-std::cout << "Dropped BlockAck frames:  " << gDroppedBlockAckFrames << std::endl;
 
-std::cout << "\n--- Received frame types (PHY RX end classification) ---" << std::endl;
-std::cout << "Received DATA frames:      " << gTotalDataFrames << std::endl;
-std::cout << "Received ACK frames:       " << gTotalAckFrames << std::endl;
-std::cout << "Received RTS frames:       " << gTotalRtsFrames << std::endl;
-std::cout << "Received CTS frames:       " << gTotalCtsFrames << std::endl;
-std::cout << "Received BlockAck frames:  " << gTotalBlockAckFrames << std::endl;
 
-std::cout << "\n--- Transmitted frame types (PHY TX classification) ---" << std::endl;
-std::cout << "Transmitted DATA frames:      " << gTotalTxDataFrames << std::endl;
-std::cout << "Transmitted ACK frames:       " << gTotalTxAckFrames << std::endl;
-std::cout << "Transmitted RTS frames:       " << gTotalTxRtsFrames << std::endl;
-std::cout << "Transmitted CTS frames:       " << gTotalTxCtsFrames << std::endl;
-std::cout << "Transmitted BlockAck frames:  " << gTotalTxBlockAckFrames << std::endl;
+// ============================================================================
+// === CLEAN-UP ===
+Simulator::Destroy();
+return 0;
 
 
   // Clean-up
