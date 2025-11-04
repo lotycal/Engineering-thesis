@@ -876,7 +876,7 @@ for (const auto& kv : gTxOppDurationPerDev)
 }
 
 // --- PSDU-Level PHY Counters ---
-std::cout << "\n--- PHY PSDU Statistics ---\n";
+std::cout << "\n--- PHY PSDU Statistics ---\n"
           << "PHY header failures: " << gPhyHeaderFailures << "\n"
           << "RX while decoding preamble: " << gRxWhileDecoding << "\n"
           << "RX aborted by TX: " << gRxAbortedByTx << "\n"
@@ -985,10 +985,10 @@ for (uint32_t i = 0; i < NodeList::GetNNodes(); ++i)
             totalFailures += gFailuresPerDev[key];
     }
 }
-          << "Tx Attempts (aggregate): " << totalTxAttempts << "\n"
-          << "Tx Retries (aggregate):  " << totalRetries    << "\n"
-          << "Tx Failures (aggregate): " << totalFailures   << "\n";
 
+std::cout << "Tx Attempts (aggregate): " << totalTxAttempts << "\n"
+          << "Tx Retries (aggregate):  " << totalRetries << "\n"
+          << "Tx Failures (aggregate): " << totalFailures << "\n";
 
 // --- Derived performance metrics per node/device ---
 std::cout << "\n--- MAC Derived Performance Metrics ---\n";
@@ -1099,17 +1099,17 @@ std::cout << "\n--- Aggregate Packet Statistics ---\n"
           << ", Loss Ratio=" << std::fixed << std::setprecision(2)
           << totalLossRatio << "%\n";
 
-uint64_t totalLost2 = (totalSent > totalReceived) ? (totalSent - totalReceived) : 0;
-double totalLossRatio2 = (totalSent > 0)
-    ? (static_cast<double>(totalLost2) / totalSent) * 100.0
-    : 0.0;
+// uint64_t totalLost2 = (totalSent > totalReceived) ? (totalSent - totalReceived) : 0;
+// double totalLossRatio2 = (totalSent > 0)
+//     ? (static_cast<double>(totalLost2) / totalSent) * 100.0
+//     : 0.0;
 
-std::cout << "\n--- Aggregate Packet Statistics ---\n"
-          << "Sent=" << totalSent
-          << ", Received=" << totalReceived
-          << ", Lost=" << totalLost2
-          << ", Loss Ratio=" << std::fixed << std::setprecision(2)
-          << totalLossRatio2 << "%\n";
+// std::cout << "\n--- Aggregate Packet Statistics ---\n"
+//           << "Sent=" << totalSent
+//           << ", Received=" << totalReceived
+//           << ", Lost=" << totalLost2
+//           << ", Loss Ratio=" << std::fixed << std::setprecision(2)
+//           << totalLossRatio2 << "%\n";
 
 
 // --- RX Timing per Node/Device ---
