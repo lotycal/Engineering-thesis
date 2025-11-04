@@ -876,7 +876,7 @@ for (const auto& kv : gTxOppDurationPerDev)
 }
 
 // --- PSDU-Level PHY Counters ---
-std::cout << "\n--- PHY PSDU Counters ---\n"
+std::cout << "\n--- PHY PSDU Statistics ---\n";
           << "PHY header failures: " << gPhyHeaderFailures << "\n"
           << "RX while decoding preamble: " << gRxWhileDecoding << "\n"
           << "RX aborted by TX: " << gRxAbortedByTx << "\n"
@@ -907,8 +907,6 @@ std::cout << "Total RX events per receiver (PSDU-based): "
           << totalPsduSuccess << std::endl;
 
 // --- PHY Frame Classification ---
-std::cout << "\n--- PHY Frame Classification ---\n";
-
 std::cout << "\n--- Dropped frame types (PHY RX drop classification) ---" << std::endl;
 std::cout << "Dropped DATA frames:      " << gDroppedDataFrames << std::endl;
 std::cout << "Dropped ACK frames:       " << gDroppedAckFrames << std::endl;
@@ -987,8 +985,6 @@ for (uint32_t i = 0; i < NodeList::GetNNodes(); ++i)
             totalFailures += gFailuresPerDev[key];
     }
 }
-
-std::cout << "\n--- MAC Aggregate Transmission Statistics ---\n"
           << "Tx Attempts (aggregate): " << totalTxAttempts << "\n"
           << "Tx Retries (aggregate):  " << totalRetries    << "\n"
           << "Tx Failures (aggregate): " << totalFailures   << "\n";
