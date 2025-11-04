@@ -182,7 +182,7 @@ void IncrementCounter(std::map<Mac48Address, T>& counter, Mac48Address address)
 static void
 PhyRxEndHandler(std::string context, Ptr<const Packet> packet)
 {
-    // --- zliczanie globalnych sukcesów PSDU ---
+     // --- counting global PSDU successes ---
     gPsduSuccesses++;
     gTotalRxEvents++;
 
@@ -190,7 +190,7 @@ PhyRxEndHandler(std::string context, Ptr<const Packet> packet)
     auto key = std::make_pair(ids.first, ids.second);
     gPsduSuccessPerDev[key]++;
 
-    // --- szczegółowa analiza nagłówka MAC ---
+    // --- detailed MAC header analysis ---
     WifiMacHeader hdr;
     Ptr<Packet> copy = packet->Copy();
 
@@ -220,23 +220,23 @@ PhyRxEndHandler(std::string context, Ptr<const Packet> packet)
             gTotalBlockAckFrames++;
         }
 
-        // ACK, BlockAck, RTS, CTS → tylko adres odbiorcy (Addr1)
+        // ACK, BlockAck, RTS, CTS → only receiver address (Addr1)
         if (hdr.IsAck() || hdr.IsBlockAck() || hdr.IsCts() || hdr.IsRts())
         {
             addr = hdr.GetAddr1();
         }
         else
         {
-            // pozostałe ramki (np. Data, Management) → adres nadawcy (Addr2)
+            // other frames (e.g., Data, Management) → sender address (Addr2)
             addr = hdr.GetAddr2();
         }
 
-        // pomijamy puste lub niepoprawne adresy (same zera, broadcast)
+        // skip empty or invalid addresses (all zeros, broadcast)
         if (addr != Mac48Address("00:00:00:00:00:00") && addr != Mac48Address::GetBroadcast())
         {
             IncrementCounter(gPsduSucceeded, addr);
 
-            // zliczanie BlockAck i BlockAckReq
+            // counting BlockAck and BlockAckReq
             if (hdr.IsBlockAck())
             {
                 IncrementCounter(gBlockAckRx, addr);
@@ -247,7 +247,7 @@ PhyRxEndHandler(std::string context, Ptr<const Packet> packet)
             }
         }
 
-        // oznaczanie pakietów z/do tagiem TimestampTag
+        // marking packets with/without TimestampTag
         TimestampTag ts;
         if (packet->PeekPacketTag(ts))
         {
