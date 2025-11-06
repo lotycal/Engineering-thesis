@@ -991,7 +991,7 @@ std::cout << "Tx Attempts (aggregate): " << totalTxAttempts << "\n"
           << "Tx Failures (aggregate): " << totalFailures << "\n";
 
 // --- Derived performance metrics per node/device ---
-std::cout << "\n--- MAC Derived Performance Metrics ---\n";
+std::cout << "\n--- MAC Derived Performance Metrics per Node/Device ---\n";
 for (const auto &kv : gMpduTxPerDev)
 {
   auto key = kv.first;
@@ -1110,24 +1110,6 @@ std::cout << "\n--- Aggregate Packet Statistics ---\n"
 //           << ", Lost=" << totalLost2
 //           << ", Loss Ratio=" << std::fixed << std::setprecision(2)
 //           << totalLossRatio2 << "%\n";
-
-
-// --- RX Timing per Node/Device ---
-std::cout << "\n--- RX Timing per Node/Device ---\n";
-for (const auto& kv : gFirstRxTimePerDev)
-{
-    uint32_t nodeId = kv.first.first;
-    uint32_t devId = kv.first.second;
-    double first = kv.second.GetSeconds();
-    double last = gLastRxTimePerDev.count(kv.first) ? gLastRxTimePerDev.at(kv.first).GetSeconds() : first;
-    double duration = std::max(0.0, last - first);
-
-    std::cout << "Node " << nodeId << " | Dev " << devId
-              << " | First RX=" << std::fixed << std::setprecision(6) << first << " s"
-              << " | Last RX=" << last << " s"
-              << " | Duration=" << duration << " s"
-              << std::endl;
-}
 
 // --- Receiver-side Throughput ---
 std::cout << "\n--- Receiver-side Throughput ---\n";
