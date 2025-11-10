@@ -81,9 +81,6 @@ int main(int argc, char *argv[])
   cmd.AddValue("nWifi", "number of stations", nWifi);
   cmd.Parse(argc, argv);
 
-  std::ofstream csv("collision-results.csv");
-  csv << "nWifi,Successes,Failures,pCollision\n";
-
   // Print simulation settings to screen
   std::cout << std::endl
             << "Simulating an IEEE 802.11ax network with the following settings:" << std::endl;
@@ -103,7 +100,6 @@ int main(int argc, char *argv[])
   YansWifiChannelHelper channel = YansWifiChannelHelper::Default();
   YansWifiPhyHelper phy;
   phy.SetChannel(channel.Create());
-
 
   // Create and configure Wi-Fi network
   WifiMacHelper mac;
@@ -171,8 +167,12 @@ int main(int argc, char *argv[])
     auto ipv4 = wifiApNode.Get(0)->GetObject<Ipv4>();                       // Get destination's IP interface
     const auto address = ipv4->GetAddress(1, 0).GetLocal();                 // Get destination's IP address
     InetSocketAddress sinkSocket(address, portNumber++);                    // Configure destination socket
-    OnOffHelper onOffHelper("ns3::UdpSocketFactory", sinkSocket);           // Configure traffic generator: UDP, destination socket
-    onOffHelper.SetConstantRate(DataRate(150e6 / nWifi), 1472);            // Set data rate (150 Mb/s divided by no. of transmitting stations) and packet size [B]
+    OnOffHelper onOffHelper("ns3::UdpSocketFactory", sinkSocket);
+    onOffHelper.SetConstantRate(DataRate("200Mbps"), 1472);
+    onOffHelper.SetAttribute("OnTime",  StringValue("ns3::ConstantRandomVariable[Constant=1]"));
+    onOffHelper.SetAttribute("OffTime", StringValue("ns3::ConstantRandomVariable[Constant=0]"));
+    onOffHelper.SetAttribute("PacketSize", UintegerValue(1472));
+    onOffHelper.SetAttribute("DataRate", DataRateValue(DataRate("10Gbps")));
     sourceApplications.Add(onOffHelper.Install(wifiStaNodes.Get(index)));    // Install traffic generator on station
     PacketSinkHelper packetSinkHelper("ns3::UdpSocketFactory", sinkSocket); // Configure traffic sink
     sinkApplications.Add(packetSinkHelper.Install(wifiApNode.Get(0)));      // Install traffic sink
