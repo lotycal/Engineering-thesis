@@ -49,6 +49,9 @@
 #include "ns3/wifi-tx-stats-helper.h"
 #include "ns3/timestamp-tag.h"
 #include <iomanip>
+#include "ns3/wifi-static-setup-helper.h"
+#include <fstream>
+#include <algorithm>
 
 
 // Exercise: 1
@@ -627,80 +630,77 @@ int main(int argc, char *argv[])
   std::cout << "- channel width: " << channelWidth << " MHz" << std::endl;
   std::cout << "- guard interval: " << gi << " ns" << std::endl;
 
-  // Create stations and an AP
+  // === Create stations and an AP ===
   NodeContainer wifiStaNodes;
   wifiStaNodes.Create(nWifi);
   NodeContainer wifiApNode;
   wifiApNode.Create(1);
 
-  // Create a default wireless channel and PHY
+  // === Create PHY and channel ===
   YansWifiChannelHelper channel = YansWifiChannelHelper::Default();
   YansWifiPhyHelper phy;
   phy.SetChannel(channel.Create());
 
+  // === General Wi-Fi configuration ===
   Config::SetDefault("ns3::WifiRemoteStationManager::RtsCtsThreshold", UintegerValue(0));
 
-
-  // Create and configure Wi-Fi network
-  WifiMacHelper mac;
   WifiHelper wifi;
-  wifi.SetStandard(WIFI_STANDARD_80211a);
-  
-  // Set channel width for given PHY
-  //std::string channelStr("{0, " + std::to_string(channelWidth) + ", BAND_5GHZ, 0}");
-  //phy.Set("ChannelSettings", StringValue(channelStr));
+  wifi.SetStandard(WIFI_STANDARD_80211ax); // <-- HE (High Efficiency, czyli 802.11ax)
+  wifi.SetRemoteStationManager("ns3::IdealWifiManager");
+
+  WifiMacHelper mac;
+  Ssid ssid = Ssid("ns3-80211ax");
+
+  // === STA (stations) ===
+  mac.SetType("ns3::StaWifiMac",
+              "Ssid", SsidValue(ssid),
+              "ActiveProbing", BooleanValue(false));
+  NetDeviceContainer staDevices = wifi.Install(phy, mac, wifiStaNodes);
+
+  // === AP (access point) ===
+  mac.SetType("ns3::ApWifiMac",
+              "Ssid", SsidValue(ssid));
+  NetDeviceContainer apDevices = wifi.Install(phy, mac, wifiApNode);
+
+  // === STATIC SETUP (802.11ax Block Ack) ===
+  Ptr<WifiNetDevice> apDev = DynamicCast<WifiNetDevice>(apDevices.Get(0));
+  Ptr<WifiNetDevice> staDev = DynamicCast<WifiNetDevice>(staDevices.Get(0));
+
+  NS_ASSERT(apDev != nullptr && staDev != nullptr);
+
+  std::cout << "AP device: " << apDev << ", STA device: " << staDev << std::endl;
+
+  WifiStaticSetupHelper::SetStaticAssociation(apDev, staDevices);
+  WifiStaticSetupHelper::SetStaticBlockAck(apDev, staDevices, {0});
+
+  // === PHY configuration ===
   phy.Set("ChannelSettings", StringValue("{36, 20, BAND_5GHZ, 0}"));
 
-  //std::ostringstream oss;
-  //oss << "HeMcs" << mcs;
-  //wifi.SetRemoteStationManager("ns3::ConstantRateWifiManager", "DataMode", StringValue(oss.str()),
-  //                             "ControlMode", StringValue(oss.str())); // Set MCS
-
-  wifi.SetRemoteStationManager("ns3::IdealWifiManager");
-  
-  //Ssid ssid = Ssid("ns3-80211ax"); // Set SSID
-
-  mac.SetType("ns3::AdhocWifiMac");
-  //mac.SetType("ns3::StaWifiMac",
-  //            "Ssid", SsidValue(ssid));
-
-  // Create and configure Wi-Fi interfaces
-  NetDeviceContainer staDevice;
-  staDevice = wifi.Install(phy, mac, wifiStaNodes);
-
-  //mac.SetType("ns3::ApWifiMac",
-  //            "Ssid", SsidValue(ssid));
-
-  NetDeviceContainer apDevice;
-  apDevice = wifi.Install(phy, mac, wifiApNode);
-
-  // --- MAC layer statistics helper ---
+  // === TX stats helper ===
   WifiTxStatsHelper txStats;
-  txStats.Enable(staDevice);
-  txStats.Enable(apDevice);
+  txStats.Enable(staDevices);
+  txStats.Enable(apDevices);
 
-  // Set guard interval on all interfaces of all nodes
-  Config::Set("/NodeList/*/DeviceList/*/$ns3::WifiNetDevice/HeConfiguration/GuardInterval", TimeValue(NanoSeconds(gi)));
+  // === Guard interval ===
+  Config::Set("/NodeList/*/DeviceList/*/$ns3::WifiNetDevice/HeConfiguration/GuardInterval",
+              TimeValue(NanoSeconds(gi)));
 
-  // Configure mobility
+  // === Mobility ===
   MobilityHelper mobility;
   mobility.SetMobilityModel("ns3::ConstantPositionMobilityModel");
   mobility.Install(wifiApNode);
   mobility.Install(wifiStaNodes);
 
-  // Install an Internet stack
+  // === IP stack and addressing ===
   InternetStackHelper stack;
   stack.Install(wifiApNode);
   stack.Install(wifiStaNodes);
 
-  // Configure IP addressing
   Ipv4AddressHelper address;
   address.SetBase("192.168.1.0", "255.255.255.0");
-  Ipv4InterfaceContainer staNodeInterface;
-  Ipv4InterfaceContainer apNodeInterface;
 
-  staNodeInterface = address.Assign(staDevice);
-  apNodeInterface = address.Assign(apDevice);
+  Ipv4InterfaceContainer apInterface = address.Assign(apDevices);
+  Ipv4InterfaceContainer staInterface = address.Assign(staDevices);
 
   PopulateARPcache();
 
@@ -991,7 +991,7 @@ std::cout << "Tx Attempts (aggregate): " << totalTxAttempts << "\n"
           << "Tx Failures (aggregate): " << totalFailures << "\n";
 
 // --- Derived performance metrics per node/device ---
-std::cout << "\n--- MAC Derived Performance Metrics per Node/Device ---\n";
+std::cout << "\n--- MAC Derived Performance Metrics ---\n";
 for (const auto &kv : gMpduTxPerDev)
 {
   auto key = kv.first;
@@ -1110,6 +1110,24 @@ std::cout << "\n--- Aggregate Packet Statistics ---\n"
 //           << ", Lost=" << totalLost2
 //           << ", Loss Ratio=" << std::fixed << std::setprecision(2)
 //           << totalLossRatio2 << "%\n";
+
+
+// --- RX Timing per Node/Device ---
+std::cout << "\n--- RX Timing per Node/Device ---\n";
+for (const auto& kv : gFirstRxTimePerDev)
+{
+    uint32_t nodeId = kv.first.first;
+    uint32_t devId = kv.first.second;
+    double first = kv.second.GetSeconds();
+    double last = gLastRxTimePerDev.count(kv.first) ? gLastRxTimePerDev.at(kv.first).GetSeconds() : first;
+    double duration = std::max(0.0, last - first);
+
+    std::cout << "Node " << nodeId << " | Dev " << devId
+              << " | First RX=" << std::fixed << std::setprecision(6) << first << " s"
+              << " | Last RX=" << last << " s"
+              << " | Duration=" << duration << " s"
+              << std::endl;
+}
 
 // --- Receiver-side Throughput ---
 std::cout << "\n--- Receiver-side Throughput ---\n";
@@ -1234,6 +1252,49 @@ std::cout << "Total duration (sum over all receivers): "
           << std::fixed << std::setprecision(6)
           << totalDataTransferDuration << " s\n";
 
+// === DELAY CSV + CDF ===
+if (!gDelays.empty())
+{
+    {
+        std::ofstream csv("delays.csv");
+        csv << "delay_s,delay_us\n";
+        csv << std::fixed << std::setprecision(9);
+        for (double d : gDelays)
+        {
+            csv << d << "," << (d * 1e6) << "\n";
+        }
+    }
+
+    std::vector<double> sorted = gDelays;
+    std::sort(sorted.begin(), sorted.end());
+
+    std::ofstream cdf("delays_cdf.csv");
+    cdf << "delay_s,cdf\n";
+    cdf << std::fixed << std::setprecision(9);
+
+    const size_t N = sorted.size();
+    for (size_t i = 0; i < N; ++i)
+    {
+        double Fx = static_cast<double>(i + 1) / static_cast<double>(N);
+        cdf << sorted[i] << "," << Fx << "\n";
+    }
+
+    auto pct = [&](double p){
+        size_t idx = static_cast<size_t>(std::ceil(p * N)) - 1;
+        if (idx >= N) idx = N - 1;
+        return sorted[idx];
+    };
+
+    std::cout << "\n--- Delay percentiles (seconds) ---\n";
+    std::cout << "P50 : " << pct(0.50) << " s\n";
+    std::cout << "P90 : " << pct(0.90) << " s\n";
+    std::cout << "P95 : " << pct(0.95) << " s\n";
+    std::cout << "P99 : " << pct(0.99) << " s\n";
+}
+else
+{
+    std::cout << "\n(No delays collected: gDelays is empty)\n";
+}
 
 
 // ============================================================================
