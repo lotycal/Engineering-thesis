@@ -41,6 +41,10 @@
 #include "ns3/yans-wifi-channel.h"
 #include <chrono> // For high resolution clock
 #include "ns3/wifi-tx-stats-helper.h"
+#include "ns3/wifi-phy.h"
+#include <iomanip>
+
+
 
 
 
@@ -63,6 +67,23 @@
 using namespace ns3;
 
 NS_LOG_COMPONENT_DEFINE ("ex1");
+
+// --- PHY (PSDU) counters ---
+static uint64_t gPsduSuccesses = 0;
+static uint64_t gPsduFailures  = 0;
+
+static void PhyRxEndHandler(std::string /*context*/, Ptr<const Packet> /*p*/)
+{
+    gPsduSuccesses++;
+}
+
+static void PhyRxDropHandler(std::string /*context*/,
+                             Ptr<const Packet> /*p*/,
+                             WifiPhyRxfailureReason /*reason*/)
+{
+    gPsduFailures++;
+}
+
 
 int main(int argc, char *argv[])
 {
@@ -146,9 +167,9 @@ int main(int argc, char *argv[])
   stack.Install(wifiApNode);
   stack.Install(wifiStaNodes);
 
-  WifiTxStatsHelper txStats;
-  txStats.Enable(apDevice);
-  txStats.Enable(staDevice);
+  // WifiTxStatsHelper txStats;
+  // txStats.Enable(apDevice);
+  // txStats.Enable(staDevice);
 
   // Configure IP addressing
   Ipv4AddressHelper address;
@@ -168,12 +189,8 @@ int main(int argc, char *argv[])
     const auto address = ipv4->GetAddress(1, 0).GetLocal();                 // Get destination's IP address
     InetSocketAddress sinkSocket(address, portNumber++);                    // Configure destination socket
     OnOffHelper onOffHelper("ns3::UdpSocketFactory", sinkSocket);
-    onOffHelper.SetConstantRate(DataRate("200Mbps"), 1472);
-    onOffHelper.SetAttribute("OnTime",  StringValue("ns3::ConstantRandomVariable[Constant=1]"));
-    onOffHelper.SetAttribute("OffTime", StringValue("ns3::ConstantRandomVariable[Constant=0]"));
-    onOffHelper.SetAttribute("PacketSize", UintegerValue(1472));
-    onOffHelper.SetAttribute("DataRate", DataRateValue(DataRate("10Gbps")));
-    sourceApplications.Add(onOffHelper.Install(wifiStaNodes.Get(index)));    // Install traffic generator on station
+    onOffHelper.SetConstantRate(DataRate(150e6 / nWifi), 1472);
+    sourceApplications.Add(onOffHelper.Install(wifiStaNodes.Get(index)));
     PacketSinkHelper packetSinkHelper("ns3::UdpSocketFactory", sinkSocket); // Configure traffic sink
     sinkApplications.Add(packetSinkHelper.Install(wifiApNode.Get(0)));      // Install traffic sink
   }
@@ -197,6 +214,13 @@ int main(int argc, char *argv[])
   // Record start time
   auto start = std::chrono::high_resolution_clock::now();
 
+  Config::Connect("/NodeList/*/DeviceList/*/$ns3::WifiNetDevice/Phy/PhyRxEnd",
+                MakeCallback(&PhyRxEndHandler));
+
+  Config::Connect("/NodeList/*/DeviceList/*/$ns3::WifiNetDevice/Phy/PhyRxDrop",
+                MakeCallback(&PhyRxDropHandler));
+
+
   // Run the simulation!
   Simulator::Run();
 
@@ -218,17 +242,22 @@ int main(int argc, char *argv[])
   std::cout << "Results: " << std::endl;
   std::cout << "- aggregate throughput: " << throughput << " Mbit/s" << std::endl;
 
-  uint64_t successes = txStats.GetSuccesses();
-  uint64_t failures  = txStats.GetFailures();
+  const uint64_t totalPsdus = gPsduSuccesses + gPsduFailures;
+  double pSucc = 0.0;
+  double pColl = 0.0;
 
-  double pCollision = 0.0;
-  if (successes + failures > 0)
-    pCollision = static_cast<double>(failures) / (successes + failures);
+  if (totalPsdus > 0) {
+    pSucc = static_cast<double>(gPsduSuccesses) / static_cast<double>(totalPsdus);
+    pColl = static_cast<double>(gPsduFailures)  / static_cast<double>(totalPsdus); // <-- jak wcześniej
+  }
 
-  std::cout << "\n=== MAC LAYER STATISTICS ===" << std::endl;
-  std::cout << "MPDU Successes: " << successes << std::endl;
-  std::cout << "MPDU Failures:  " << failures << std::endl;
-  std::cout << "Estimated collision probability: " << pCollision << std::endl;
+  std::cout << std::fixed << std::setprecision(4);
+  std::cout << "\n=== PHY LAYER (PSDU) ===\n";
+  std::cout << "PSDU Successes: " << gPsduSuccesses << "\n";
+  std::cout << "PSDU Failures:  " << gPsduFailures  << "\n";
+  std::cout << "P(success) = " << pSucc << " (" << (pSucc * 100.0) << "%)\n";
+  std::cout << "Estimated collision probability (PSDU) = "
+            << pColl << " (" << (pColl * 100.0) << "%)\n";
 
 
   // Clean-up
