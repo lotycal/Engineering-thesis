@@ -649,16 +649,21 @@ int main(int argc, char *argv[])
   WifiMacHelper mac;
   Ssid ssid = Ssid("ns3-80211ax");
 
-  // === STA (stations) ===
-  mac.SetType("ns3::StaWifiMac",
-              "Ssid", SsidValue(ssid),
-              "ActiveProbing", BooleanValue(false));
-  NetDeviceContainer staDevices = wifi.Install(phy, mac, wifiStaNodes);
+  // === STA/AP DISABLED FOR AD-HOC MODE ===
+  // mac.SetType("ns3::StaWifiMac",
+  //               "Ssid", SsidValue(ssid),
+  //               "ActiveProbing", BooleanValue(false));
+  // NetDeviceContainer staDevices = wifi.Install(phy, mac, wifiStaNodes);
 
-  // === AP (access point) ===
-  mac.SetType("ns3::ApWifiMac",
-              "Ssid", SsidValue(ssid));
+  // mac.SetType("ns3::ApWifiMac",
+  //               "Ssid", SsidValue(ssid));
+  // NetDeviceContainer apDevices = wifi.Install(phy, mac, wifiApNode);
+
+  // === AD-HOC MODE ===
+  mac.SetType("ns3::AdhocWifiMac");
+  NetDeviceContainer staDevices = wifi.Install(phy, mac, wifiStaNodes);
   NetDeviceContainer apDevices = wifi.Install(phy, mac, wifiApNode);
+
 
   // === STATIC SETUP (802.11ax Block Ack) ===
   Ptr<WifiNetDevice> apDev = DynamicCast<WifiNetDevice>(apDevices.Get(0));
@@ -668,8 +673,8 @@ int main(int argc, char *argv[])
 
   std::cout << "AP device: " << apDev << ", STA device: " << staDev << std::endl;
 
-  WifiStaticSetupHelper::SetStaticAssociation(apDev, staDevices);
-  WifiStaticSetupHelper::SetStaticBlockAck(apDev, staDevices, {0});
+  //WifiStaticSetupHelper::SetStaticAssociation(apDev, staDevices);
+  //WifiStaticSetupHelper::SetStaticBlockAck(apDev, staDevices, {0});
 
   // === PHY configuration ===
   phy.Set("ChannelSettings", StringValue("{36, 20, BAND_5GHZ, 0}"));
@@ -1257,9 +1262,4 @@ std::cout << "Total duration (sum over all receivers): "
 Simulator::Destroy();
 return 0;
 
-
-  // Clean-up
-  Simulator::Destroy();
-
-  return 0;
 }
