@@ -41,10 +41,6 @@
 #include "ns3/yans-wifi-channel.h"
 #include <chrono> // For high resolution clock
 #include "ns3/wifi-tx-stats-helper.h"
-#include "ns3/wifi-phy.h"
-#include <iomanip>
-
-
 
 
 
@@ -67,23 +63,6 @@
 using namespace ns3;
 
 NS_LOG_COMPONENT_DEFINE ("ex1");
-
-// --- PHY (PSDU) counters ---
-static uint64_t gPsduSuccesses = 0;
-static uint64_t gPsduFailures  = 0;
-
-static void PhyRxEndHandler(std::string /*context*/, Ptr<const Packet> /*p*/)
-{
-    gPsduSuccesses++;
-}
-
-static void PhyRxDropHandler(std::string /*context*/,
-                             Ptr<const Packet> /*p*/,
-                             WifiPhyRxfailureReason /*reason*/)
-{
-    gPsduFailures++;
-}
-
 
 int main(int argc, char *argv[])
 {
@@ -125,33 +104,49 @@ int main(int argc, char *argv[])
   // Create and configure Wi-Fi network
   WifiMacHelper mac;
   WifiHelper wifi;
-  wifi.SetStandard(WIFI_STANDARD_80211ax);
+  wifi.SetStandard(WIFI_STANDARD_80211a);
 
   Config::SetDefault("ns3::WifiRemoteStationManager::RtsCtsThreshold", StringValue("2200"));
+  Config::SetDefault("ns3::WifiMacQueue::MaxDelay", TimeValue(Seconds(simulationTime)));
   
   // Set channel width for given PHY
-  std::string channelStr("{0, " + std::to_string(channelWidth) + ", BAND_5GHZ, 0}");
-  phy.Set("ChannelSettings", StringValue(channelStr));
+  //std::string channelStr("{0, " + std::to_string(channelWidth) + ", BAND_5GHZ, 0}");
+  //phy.Set("ChannelSettings", StringValue(channelStr));
+  phy.Set("ChannelSettings", StringValue("{36, 20, BAND_5GHZ, 0}"));
+ 
 
-  std::ostringstream oss;
-  oss << "HeMcs" << mcs;
-  wifi.SetRemoteStationManager("ns3::ConstantRateWifiManager", "DataMode", StringValue(oss.str()),
-                               "ControlMode", StringValue(oss.str())); // Set MCS
+  //std::ostringstream oss;
+  //oss << "HeMcs" << mcs;
+  //wifi.SetRemoteStationManager("ns3::ConstantRateWifiManager", "DataMode", StringValue(oss.str()),
+  //                             "ControlMode", StringValue(oss.str())); // Set MCS
+  wifi.SetRemoteStationManager("ns3::IdealWifiManager");
+ 
 
-  Ssid ssid = Ssid("ns3-80211ax"); // Set SSID
+  //Ssid ssid = Ssid("ns3-80211ax"); // Set SSID
 
-  mac.SetType("ns3::StaWifiMac",
-              "Ssid", SsidValue(ssid));
+  //mac.SetType("ns3::StaWifiMac",
+              //"Ssid", SsidValue(ssid));
+			  
+	mac.SetType("ns3::AdhocWifiMac");
 
   // Create and configure Wi-Fi interfaces
   NetDeviceContainer staDevice;
   staDevice = wifi.Install(phy, mac, wifiStaNodes);
 
-  mac.SetType("ns3::ApWifiMac",
-              "Ssid", SsidValue(ssid));
+  //mac.SetType("ns3::ApWifiMac",
+              //"Ssid", SsidValue(ssid));
 
   NetDeviceContainer apDevice;
   apDevice = wifi.Install(phy, mac, wifiApNode);
+
+
+    // Disable A-MPDU
+  for (uint32_t index = 0; index < nWifi; ++index)
+{
+    Ptr<NetDevice> dev = wifiStaNodes.Get(index)->GetDevice(0);
+    Ptr<WifiNetDevice> wifi_dev = DynamicCast<WifiNetDevice>(dev);
+    wifi_dev->GetMac()->SetAttribute("BE_MaxAmpduSize", UintegerValue(0));
+}
 
   // Set guard interval on all interfaces of all nodes
   Config::Set("/NodeList/*/DeviceList/*/$ns3::WifiNetDevice/HeConfiguration/GuardInterval", TimeValue(NanoSeconds(gi)));
@@ -167,9 +162,9 @@ int main(int argc, char *argv[])
   stack.Install(wifiApNode);
   stack.Install(wifiStaNodes);
 
-  // WifiTxStatsHelper txStats;
-  // txStats.Enable(apDevice);
-  // txStats.Enable(staDevice);
+  WifiTxStatsHelper txStats;
+  txStats.Enable(apDevice);
+  txStats.Enable(staDevice);
 
   // Configure IP addressing
   Ipv4AddressHelper address;
@@ -179,6 +174,10 @@ int main(int argc, char *argv[])
 
   staNodeInterface = address.Assign(staDevice);
   apNodeInterface = address.Assign(apDevice);
+  
+  //phy.EnablePcapAll("wifi-stats-pcoll");
+  
+  
 
   // Install applications (traffic generators)
   ApplicationContainer sourceApplications, sinkApplications;
@@ -189,8 +188,12 @@ int main(int argc, char *argv[])
     const auto address = ipv4->GetAddress(1, 0).GetLocal();                 // Get destination's IP address
     InetSocketAddress sinkSocket(address, portNumber++);                    // Configure destination socket
     OnOffHelper onOffHelper("ns3::UdpSocketFactory", sinkSocket);
-    onOffHelper.SetConstantRate(DataRate(150e6 / nWifi), 1472);
-    sourceApplications.Add(onOffHelper.Install(wifiStaNodes.Get(index)));
+    onOffHelper.SetConstantRate(DataRate(54e6 / nWifi), 1472);
+    //onOffHelper.SetAttribute("OnTime",  StringValue("ns3::ConstantRandomVariable[Constant=1]"));
+    //onOffHelper.SetAttribute("OffTime", StringValue("ns3::ConstantRandomVariable[Constant=0]"));
+    //onOffHelper.SetAttribute("PacketSize", UintegerValue(1472));
+    //onOffHelper.SetAttribute("DataRate", DataRateValue(DataRate("10Gbps")));
+    sourceApplications.Add(onOffHelper.Install(wifiStaNodes.Get(index)));    // Install traffic generator on station
     PacketSinkHelper packetSinkHelper("ns3::UdpSocketFactory", sinkSocket); // Configure traffic sink
     sinkApplications.Add(packetSinkHelper.Install(wifiApNode.Get(0)));      // Install traffic sink
   }
@@ -214,13 +217,6 @@ int main(int argc, char *argv[])
   // Record start time
   auto start = std::chrono::high_resolution_clock::now();
 
-  Config::Connect("/NodeList/*/DeviceList/*/$ns3::WifiNetDevice/Phy/PhyRxEnd",
-                MakeCallback(&PhyRxEndHandler));
-
-  Config::Connect("/NodeList/*/DeviceList/*/$ns3::WifiNetDevice/Phy/PhyRxDrop",
-                MakeCallback(&PhyRxDropHandler));
-
-
   // Run the simulation!
   Simulator::Run();
 
@@ -242,22 +238,27 @@ int main(int argc, char *argv[])
   std::cout << "Results: " << std::endl;
   std::cout << "- aggregate throughput: " << throughput << " Mbit/s" << std::endl;
 
-  const uint64_t totalPsdus = gPsduSuccesses + gPsduFailures;
-  double pSucc = 0.0;
-  double pColl = 0.0;
+  uint64_t successes = txStats.GetSuccesses();
+  uint64_t failures  = txStats.GetFailures();
+  uint64_t failures_retry  = txStats.GetFailures(WifiMacDropReason::WIFI_MAC_DROP_REACHED_RETRY_LIMIT);
+  uint64_t failures_enqueue  = txStats.GetFailures(WifiMacDropReason::WIFI_MAC_DROP_FAILED_ENQUEUE);
+  uint64_t failures_lifetime  = txStats.GetFailures(WifiMacDropReason::WIFI_MAC_DROP_EXPIRED_LIFETIME);
+  uint64_t failures_qos_old  = txStats.GetFailures(WifiMacDropReason::WIFI_MAC_DROP_QOS_OLD_PACKET);
+  uint64_t mpduRetries = txStats.GetRetransmissions();
 
-  if (totalPsdus > 0) {
-    pSucc = static_cast<double>(gPsduSuccesses) / static_cast<double>(totalPsdus);
-    pColl = static_cast<double>(gPsduFailures)  / static_cast<double>(totalPsdus); // <-- jak wcześniej
-  }
+  double pCollision = 0.0;
+  if (successes + failures > 0)
+    pCollision = static_cast<double>(failures_retry+mpduRetries) / (successes + failures_retry + mpduRetries);
 
-  std::cout << std::fixed << std::setprecision(4);
-  std::cout << "\n=== PHY LAYER (PSDU) ===\n";
-  std::cout << "PSDU Successes: " << gPsduSuccesses << "\n";
-  std::cout << "PSDU Failures:  " << gPsduFailures  << "\n";
-  std::cout << "P(success) = " << pSucc << " (" << (pSucc * 100.0) << "%)\n";
-  std::cout << "Estimated collision probability (PSDU) = "
-            << pColl << " (" << (pColl * 100.0) << "%)\n";
+  std::cout << "\n=== MAC LAYER STATISTICS ===" << std::endl;
+  std::cout << "MPDU Successes: " << successes << std::endl;
+  std::cout << "MPDU Failures (total):  " << failures << std::endl;
+  std::cout << "MPDU Failures (retry):  " << failures_retry << std::endl;
+  std::cout << "MPDU Failures (enqueue):  " << failures_enqueue << std::endl;
+  std::cout << "MPDU Failures (lifetime):  " << failures_lifetime << std::endl;
+  std::cout << "MPDU Failures (qos_old):  " << failures_qos_old << std::endl;
+  std::cout << "MPDU Retries:  " << mpduRetries << std::endl;
+  std::cout << "Estimated collision probability: " << pCollision << std::endl;
 
 
   // Clean-up
