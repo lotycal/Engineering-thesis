@@ -308,64 +308,73 @@ static void DetailedPhyRxDropHandler(std::string context,
                                      Ptr<const ns3::Packet> packet,
                                      ns3::WifiPhyRxfailureReason reason)
 {
-  WifiMacHeader hdr;
-  Mac48Address addr;
+    // --- Global PHY counters ---
+    gPsduFailures++;       // Global PSDU failure
+    gTotalRxEvents++;      // Count RX events
+    gTotalPhyEvents++;     // Count PHY events
 
-  if (packet)
-  {
-    Ptr<Packet> copy = packet->Copy();
-    if (copy->PeekHeader(hdr))
+    WifiMacHeader hdr;
+    Mac48Address addr;
+
+    if (packet)
     {
-      addr = hdr.GetAddr2();
+        Ptr<Packet> copy = packet->Copy();
 
-      // --- classify frame type ---
-      if (hdr.IsData())
-      {
-        gDroppedDataFrames++;
-      }
-      else if (hdr.IsAck())
-      {
-        gDroppedAckFrames++;
-      }
-      else if (hdr.IsRts())
-      {
-        gDroppedRtsFrames++;
-      }
-      else if (hdr.IsCts())
-      {
-        gDroppedCtsFrames++;
-      }
-      else if (hdr.IsBlockAck())
-      {
-        gDroppedBlockAckFrames++;
-      }
+        if (copy->PeekHeader(hdr))
+        {
+            // --- Extract sender address (Addr2) ---
+            addr = hdr.GetAddr2();
 
-      // existing reason-based counting
-      switch (reason)
-      {
-        case ns3::WifiPhyRxfailureReason::L_SIG_FAILURE:
-        case ns3::WifiPhyRxfailureReason::HT_SIG_FAILURE:
-        case ns3::WifiPhyRxfailureReason::SIG_A_FAILURE:
-        case ns3::WifiPhyRxfailureReason::SIG_B_FAILURE:
-          IncrementCounter(gPhyHeaderFailed, addr);
-          break;
+            // --- Classify dropped frame type ---
+            if (hdr.IsData())
+            {
+                gDroppedDataFrames++;
+            }
+            else if (hdr.IsAck())
+            {
+                gDroppedAckFrames++;
+            }
+            else if (hdr.IsRts())
+            {
+                gDroppedRtsFrames++;
+            }
+            else if (hdr.IsCts())
+            {
+                gDroppedCtsFrames++;
+            }
+            else if (hdr.IsBlockAck())
+            {
+                gDroppedBlockAckFrames++;
+            }
 
-        case ns3::WifiPhyRxfailureReason::BUSY_DECODING_PREAMBLE:
-        case ns3::WifiPhyRxfailureReason::PREAMBLE_DETECT_FAILURE:
-          IncrementCounter(gRxEventWhileDecoding, addr);
-          break;
+            // --- Count failures per reason ---
+            switch (reason)
+            {
+                case ns3::WifiPhyRxfailureReason::L_SIG_FAILURE:
+                case ns3::WifiPhyRxfailureReason::HT_SIG_FAILURE:
+                case ns3::WifiPhyRxfailureReason::SIG_A_FAILURE:
+                case ns3::WifiPhyRxfailureReason::SIG_B_FAILURE:
+                    IncrementCounter(gPhyHeaderFailed, addr);
+                    break;
 
-        case ns3::WifiPhyRxfailureReason::RECEPTION_ABORTED_BY_TX:
-          IncrementCounter(gRxEventAbortedByTx, addr);
-          break;
+                case ns3::WifiPhyRxfailureReason::BUSY_DECODING_PREAMBLE:
+                case ns3::WifiPhyRxfailureReason::PREAMBLE_DETECT_FAILURE:
+                    IncrementCounter(gRxEventWhileDecoding, addr);
+                    break;
 
-        default:
-          IncrementCounter(gPsduFailed, addr);
-          break;
-      }
+                case ns3::WifiPhyRxfailureReason::RECEPTION_ABORTED_BY_TX:
+                    IncrementCounter(gRxEventAbortedByTx, addr);
+                    break;
+
+                default:
+                    // PSDU-level failure (actual decoding failure)
+                    IncrementCounter(gPsduFailed, addr);
+                    break;
+            }
+        }
     }
-  }
 }
+
 
 
 static void CountRxPackets(std::string context, Ptr<const Packet> packet)
@@ -643,7 +652,7 @@ int main(int argc, char *argv[])
   phy.SetChannel(channel.Create());
 
   // === General Wi-Fi configuration ===
-  Config::SetDefault("ns3::WifiRemoteStationManager::RtsCtsThreshold", UintegerValue(0));
+  Config::SetDefault("ns3::WifiRemoteStationManager::RtsCtsThreshold", UintegerValue(2200));
 
   WifiHelper wifi;
   wifi.SetStandard(WIFI_STANDARD_80211ax); // <-- HE (High Efficiency, czyli 802.11ax)
@@ -657,6 +666,17 @@ int main(int argc, char *argv[])
               "Ssid", SsidValue(ssid),
               "ActiveProbing", BooleanValue(false));
   NetDeviceContainer staDevices = wifi.Install(phy, mac, wifiStaNodes);
+
+  // === Disable A-MPDU aggregation (matching pcoll.cc behavior) ===
+  for (uint32_t index = 0; index < staDevices.GetN(); ++index)
+  {
+      Ptr<NetDevice> dev = staDevices.Get(index);
+      Ptr<WifiNetDevice> wifiDev = DynamicCast<WifiNetDevice>(dev);
+      if (wifiDev)
+      {
+          wifiDev->GetMac()->SetAttribute("BE_MaxAmpduSize", UintegerValue(0));
+      }
+  }
 
   // === AP (access point) ===
   mac.SetType("ns3::ApWifiMac",
@@ -901,6 +921,15 @@ std::cout << "\n--- PHY PSDU Statistics ---\n"
           << "Total RX events: " << gTotalRxEvents << "\n"
           << "Total PHY events: " << gTotalPhyEvents << "\n";
 
+double psduTotal = gPsduSuccesses + gPsduFailures;
+double psduFailureRate = (psduTotal > 0)
+    ? static_cast<double>(gPsduFailures) / psduTotal
+    : 0.0;
+
+std::cout << "\n--- PHY DERIVED ERROR RATES ---\n";
+std::cout << "PSDU Failure Rate:           " << psduFailureRate * 100 << " %\n";
+
+
 // --- PSDU Success per Receiver ---
 std::cout << "\n--- PSDU Success per Receiver ---\n";
 for (const auto& kv : gPsduSuccessPerDev)
@@ -958,6 +987,22 @@ uint64_t mpduRetries = txStats.GetRetransmissions();
 std::cout << "MPDU Successes:   " << mpduSuccesses << "\n"
           << "MPDU Failures:    " << mpduFailures  << "\n"
           << "MPDU Retransmits: " << mpduRetries   << "\n";
+
+// === MAC DERIVED ERROR RATES ===
+double mpduTotal = mpduSuccesses + mpduFailures;
+double mpduFailureRate = (mpduTotal > 0)
+    ? static_cast<double>(mpduFailures) / mpduTotal
+    : 0.0;
+
+double mpduAttemptTotal = mpduSuccesses + mpduFailures + mpduRetries;
+double mpduRetransmissionRate = (mpduAttemptTotal > 0)
+    ? static_cast<double>(mpduRetries) / mpduAttemptTotal
+    : 0.0;
+
+std::cout << "\n--- MAC DERIVED ERROR RATES ---\n";
+std::cout << "MPDU Failure Rate:           " << mpduFailureRate * 100 << " %\n";
+std::cout << "MPDU Retransmission Rate:    " << mpduRetransmissionRate * 100 << " %\n";
+
 
 
 // --- Per-node/device MPDU breakdown ---
@@ -1311,7 +1356,6 @@ else
 {
     std::cout << "\n(No delays collected: gDelays is empty)\n";
 }
-
 
 // ============================================================================
 // === CLEAN-UP ===
